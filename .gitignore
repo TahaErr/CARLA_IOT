@@ -1,0 +1,40 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+.venv/
+venv/
+env/
+
+.vscode/
+.idea/
+.cursor/
+.ipynb_checkpoints/
+*.swp
+.DS_Store
+Thumbs.db
+
+# CARLA outputs (regenerate from scripts)
+out/
+*.mp4
+*.avi
+
+# Datasets (large, regenerate via script 15)
+dataset_*/
+
+# YOLO weights + training artifacts
+*.pt
+*.pth
+*.onnx
+runs/
+weights/
+
+*.log
+logs/
+scratch/
+tmp/
+.env

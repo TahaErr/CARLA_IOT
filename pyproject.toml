@@ -1,0 +1,17 @@
+[project]
+name = "v2xsim"
+version = "0.0.1"
+description = "Cooperative perception at smart intersections (CMP794 final)."
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "carla==0.9.16",
+    "numpy>=1.24",
+]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["v2xsim*"]
