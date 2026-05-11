@@ -37,11 +37,13 @@ def discover_intersections(world: carla.World) -> List[Intersection]:
     """Return every signalized intersection in the current map.
 
     Each intersection is exactly one CARLA traffic-light group; the group's
-    centroid is reported as the intersection's center.
+    centroid is reported as the intersection's center. The returned list is
+    sorted by (center.x, center.y) so IDs are stable across CARLA restarts —
+    important for reproducible train/val splits over multi-run datasets.
     """
     all_lights = list(world.get_actors().filter("traffic.traffic_light"))
     seen_ids: set[int] = set()
-    out: List[Intersection] = []
+    raw: List[Intersection] = []
 
     for tl in all_lights:
         if tl.id in seen_ids:
@@ -50,11 +52,16 @@ def discover_intersections(world: carla.World) -> List[Intersection]:
         for g in group:
             seen_ids.add(g.id)
         center = _centroid([g.get_location() for g in group])
-        out.append(
+        raw.append(
             Intersection(
-                id=len(out),
+                id=-1,  # reassigned after sort
                 center=center,
                 lights=list(group),
             )
         )
-    return out
+
+    # Stable order by world coords; reassign sequential IDs.
+    raw.sort(key=lambda i: (round(i.center.x, 1), round(i.center.y, 1)))
+    for new_id, it in enumerate(raw):
+        it.id = new_id
+    return raw

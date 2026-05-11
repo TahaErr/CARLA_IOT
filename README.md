@@ -1,101 +1,195 @@
 # V2X-Sim — Cooperative Perception at Smart Intersections
 
-Code scaffold for the CMP794 final project (Taha Yasin ER & Doruk TOPÇU).
+Code for the CMP794 final project (Taha Yasin Er & Doruk Topçu).
 
-This is the **Sprint 1** deliverable: environment smoke test + Town05 RSU
-skeleton. No detector, no V2X channel model, no fusion module yet — those come
-in subsequent sprints.
+**Current status:** Sprint 2 complete — detector fine-tuned and cross-town evaluated. Ready for Sprint 3 (CPM encoder + V2X channel). See `PROGRESS.md` for the full state.
+
+---
 
 ## Setup (Windows + conda)
 
-CARLA 0.9.16 ships official wheels only for Python 3.10 / 3.11 / 3.12.
-We use 3.10.
+CARLA 0.9.16 ships official wheels only for Python 3.10 / 3.11 / 3.12; this project uses 3.10.
 
 ```bat
-:: 1) create env
+:: create env
 conda create -n v2xsim python=3.10 -y
 conda activate v2xsim
 
-:: 2) install package + deps in editable mode
+:: install package + deps in editable mode
 pip install -e .
+
+:: install Ultralytics for YOLO26
+pip install ultralytics
+
+:: replace default torch with the CUDA-12.8 build (required for RTX 50-series / sm_120)
+pip uninstall torch torchvision torchaudio -y
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 ```
 
 Sanity check:
 ```bat
 python -c "import carla; print('carla', carla.__version__)"
+python -c "import torch; print('cuda available:', torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else '')"
 ```
 
-## Run
+---
 
-In one terminal, start the CARLA server (UE5 build for 0.9.16):
+## Start the CARLA server
+
+In one terminal:
 ```bat
 cd C:\path\to\CARLA_0.9.16
 .\CarlaUE5.exe -quality-level=Low
+:: or for UE4 builds: .\CarlaUE4.exe -quality-level=Low
 ```
-(If your build is the UE4 variant, use `CarlaUE4.exe` instead. The quality
-flag is just to keep GPU load low while we develop.)
 
-In another terminal, with `v2xsim` env active:
+All scripts below assume this server is running on `127.0.0.1:2000`.
+
+---
+
+## Sprint 1 — RSU smoke tests (verify the setup)
 
 ```bat
-:: A2 — smoke test (writes out\smoke_test.png)
+:: A — chase-camera smoke test
 python scripts\01_smoke_test.py
 
-:: B1 — list signalized intersections in Town05 (sanity check before B3)
+:: B1 — list signalised intersections in a map
 python scripts\02_list_intersections.py --map Town05
 
-:: B3 — mount one RSU on intersection 0, save one frame per camera
+:: B3 — single RSU camera frame at intersection 0
 python scripts\03_rsu_capture.py --map Town05 --intersection 0
+
+:: B4 — HD video at a chosen intersection light pole
+python scripts\12_rsu_video.py --intersection 0 --light-idx 0 --duration 10
 ```
 
-## Verify checklist
+Outputs go to `out/`. PASS = files non-empty and visually reasonable.
 
-- [ ] **A2** `out\smoke_test.png` is a non-black image taken from a chase
-      camera behind a Tesla Model 3 driving in autopilot.
-- [ ] **B1** `02_list_intersections.py` prints **N > 0** entries for Town05.
-      (Town05 has many signalized intersections; expect ~10+.)
-- [ ] **B3** `out\rsu00_cam*.png` contains one image per traffic-light pole
-      at intersection 0, each looking inward toward the intersection center.
+---
 
-If any of these fail, the failure mode is informative — see Troubleshooting.
+## Sprint 2 — Train a CARLA-specific detector
 
-## Layout
+The full pipeline produces a YOLO26 model fine-tuned on Town03 + Town04 + Town05, evaluated on Town10 as a held-out test set.
+
+### 1. Survey intersection camera framing (optional)
+
+Captures one frame per intersection with auto-yaw pointing at the intersection centroid:
+
+```bat
+python scripts\18_survey_intersections.py --map Town05
+```
+
+Open `out/intersection_survey/*.png` and visually verify each camera frames the intersection sensibly.
+
+### 2. Generate training datasets (Town03 + Town04 + Town05)
+
+Each sweep takes 30–45 min on RTX 5080. All three sweeps write into the same output directory; the patched frame-id scheme (`Town03_t00_l0_ClearNoon_000`) prevents collisions.
+
+```bat
+python scripts\15_generate_dataset.py --map Town03 --out .\dataset_multi ^
+  --weathers ClearNoon,CloudyNoon,WetNoon,ClearSunset,CloudySunset,HardRainNoon,SoftRainNoon ^
+  --frames-per-config 12
+
+python scripts\15_generate_dataset.py --map Town04 --out .\dataset_multi ^
+  --weathers ClearNoon,CloudyNoon,WetNoon,ClearSunset,CloudySunset,HardRainNoon,SoftRainNoon ^
+  --frames-per-config 12
+
+python scripts\15_generate_dataset.py --map Town05 --out .\dataset_multi ^
+  --weathers ClearNoon,CloudyNoon,WetNoon,ClearSunset,CloudySunset,HardRainNoon,SoftRainNoon ^
+  --frames-per-config 12
+```
+
+### 3. Check class balance
+
+```bat
+python scripts\19_check_distribution.py .\dataset_multi
+```
+
+Imbalance should be < 4x for every class. Targets we hit:
+- vehicle 1.0x, motorcycle 1.5x, bicycle 2.6x, pedestrian 1.2x
+
+### 4. Generate the held-out Town10 test set
+
+`--val-stride 1` puts every frame in the val split (the script treats Town10 as a pure evaluation set).
+
+```bat
+python scripts\15_generate_dataset.py --map Town10HD_Opt --out .\dataset_town10_v2 ^
+  --weathers ClearNoon,CloudyNoon,WetNoon,ClearSunset,CloudySunset,HardRainNoon,SoftRainNoon ^
+  --frames-per-config 12 --val-stride 1
+
+python scripts\19_check_distribution.py .\dataset_town10_v2
+```
+
+### 5. Fine-tune YOLO26s
+
+```bat
+python scripts\16_train_yolo.py --data .\dataset_multi\data.yaml ^
+  --name yolo26s_carla_multi
+```
+
+Defaults: `imgsz=1280, batch=8, epochs=50, patience=20, cache=False` (Windows-safe). Takes ~2–3 hours on RTX 5080.
+
+Output: `runs/detect/yolo26s_carla_multi/weights/best.pt`. The script prints the final save path.
+
+### 6. Cross-town evaluation
+
+```bat
+python scripts\17_eval_town10.py ^
+  --weights runs/detect/yolo26s_carla_multi/weights/best.pt ^
+  --data .\dataset_town10_v2\data.yaml
+```
+
+Expected metrics (multi-town strategy, Town10 cross-town):
+- mAP@50 ≈ 0.53, mAP@50:95 ≈ 0.37
+- precision ≈ 0.85, recall ≈ 0.50
+
+PR curves and confusion matrix are saved under `runs/detect/yolo26s_carla_town10_eval/`.
+
+---
+
+## Project layout
 
 ```
 v2x-sim/
-├── pyproject.toml              # editable install, deps
-├── README.md                   # this file
+├── pyproject.toml
+├── README.md                           # this file
+├── PROGRESS.md                         # detailed implementation notes
 ├── .gitignore
-├── v2xsim/                     # importable package
+├── v2xsim/                             # importable package
 │   ├── __init__.py
-│   ├── carla_utils.py          # connect helper + sync-mode context manager
-│   ├── intersections.py        # discover signalized intersections
-│   └── rsu.py                  # RSU class (cameras at light poles)
-└── scripts/                    # runnable entry points
+│   ├── carla_utils.py                  # connect + sync mode + ensure_map
+│   ├── intersections.py                # discover_intersections (deterministic sort)
+│   └── rsu.py                          # single-camera RSU class
+└── scripts/
     ├── 01_smoke_test.py
     ├── 02_list_intersections.py
-    └── 03_rsu_capture.py
+    ├── 03_rsu_capture.py
+    ├── 12_rsu_video.py
+    ├── 13_yolo_test.py                 # YOLO26 single-frame test
+    ├── 14_rsu_video_yolo.py            # video + detection overlay
+    ├── 15_generate_dataset.py          # dataset sweep (multi-map)
+    ├── 16_train_yolo.py                # YOLO26 fine-tune
+    ├── 17_eval_town10.py               # cross-town evaluation
+    ├── 18_survey_intersections.py      # one frame per intersection
+    └── 19_check_distribution.py        # class-balance check
 ```
+
+---
 
 ## Troubleshooting
 
-- **`pip install carla==0.9.16` fails:** confirm the env is Python 3.10 with
-  `python --version`. CARLA 0.9.16 has no 3.9 wheel.
-- **`RuntimeError: time-out of 20000ms` on connect:** the CARLA server isn't
-  running, or it's bound to a different port. Default is 2000.
-- **Server stuck after a failed run:** the synchronous-mode context manager
-  restores async settings on exit, but if you killed the script with Ctrl+C
-  during `world.tick()` the server may still be in sync mode. Restart
-  `CarlaUE5.exe` to recover.
-- **`No spawn points in current map`:** the server hasn't loaded a map yet.
-  The smoke test uses whatever the server has loaded; load Town05 manually
-  in the server config or pass `--map Town05` to script 03.
+- **`pip install carla==0.9.16` fails:** confirm the env is Python 3.10 (CARLA 0.9.16 has no 3.9 wheel).
+- **`RuntimeError: time-out of 20000ms` on connect:** the CARLA server isn't running, or it's on a different port. Default is 2000. Sometimes a previous crashed run leaves the server in sync mode — restart `CarlaUE*.exe`.
+- **`Map 'Town10' not found`:** the CARLA packaged build names this map `Town10HD_Opt`. Use that as the `--map` argument.
+- **CPU inference instead of GPU (~30 ms/frame):** the default torch wheel lacks Blackwell sm_120 kernels. Reinstall with the CUDA-12.8 build (see Setup).
+- **`MemoryError` during train caching:** Windows multiprocessing cannot pickle a 22 GB RAM cache across worker processes. Use `--cache disk` or `--cache False` (already the default).
+- **Train output ends up in `runs/detect/runs/detect/<name>`:** older versions of the scripts passed `--project=runs/detect` explicitly, which Ultralytics duplicated. The current scripts let Ultralytics use its own default; verify the train script log's `weights at:` line for the actual location.
 
-## Next sprints (not in this commit)
+---
 
-- Sprint 2: YOLOv8-s integration on RSU frames; detection IoU vs. CARLA
-  ground truth on a held-out Town10 set.
-- Sprint 3: CPM Release 2 encoder/decoder + Coll-Perales latency model
-  + Thandavarayan PDR model + edge-compute budget gate.
-- Sprint 4: CAV time-aware late-fusion module + confirmation hysteresis;
-  HDV profile system; VRU stochastic walkers; full ablation runner.
+## Next sprints (not yet implemented)
+
+- **Sprint 3:** CPM Release 2 encoder/decoder; Coll-Perales latency model; Thandavarayan PDR model; edge-compute budget enforcement.
+- **Sprint 4:** CAV time-aware late-fusion module with confirmation hysteresis; HDV NHTSA-anchored driver profiles; VRU stochastic walkers; full ablation runner.
+
+See `PROGRESS.md` §10 for the Sprint 3 plan.

@@ -27,6 +27,11 @@ transform to camera frame via `cam.get_transform().get_inverse_matrix()`,
 swizzle to OpenCV (x=right, y=down, z=fwd), project with K, take
 axis-aligned (min,max) of the projected vertices.
 
+KNOWN LIMITATION (deferred from Sprint 2.2): occlusion is not handled.
+An actor behind a building still gets a label written at its projected pixel
+location. We rely on the 80m distance filter to limit the impact and will
+revisit if cross-town eval shows poor precision. See PROGRESS.md.
+
 Output layout (YOLO standard):
   <out_dir>/
     images/{train,val}/<frame_id>.png
@@ -61,7 +66,6 @@ CLS_PEDESTRIAN = 3
 CLASS_NAMES = ["vehicle", "motorcycle", "bicycle", "pedestrian"]
 
 _MOTORCYCLE_KEYS = ("harley", "kawasaki", "yamaha", "vespa")
-_BICYCLE_KEYS = ("bh.crossbike", "diamondback", "gazelle", "omafiets")
 
 
 def classify_actor(actor: carla.Actor) -> Optional[int]:
@@ -170,45 +174,113 @@ def parse_str_list(s: str) -> List[str]:
 # --- Traffic & walker spawning ----------------------------------------------
 
 
-def spawn_traffic_global(world: carla.World, tm, n: int) -> List[carla.Actor]:
-    """Spawn up to n vehicles at random spawn points across the whole map, autopilot."""
+def _bp_n_wheels(bp) -> int:
+    """Return blueprint's number_of_wheels, defaulting to 4 if missing."""
+    if bp.has_attribute("number_of_wheels"):
+        try:
+            return bp.get_attribute("number_of_wheels").as_int()
+        except Exception:
+            return 4
+    return 4
+
+
+def spawn_traffic_global(
+    world: carla.World, tm, n: int, two_wheeler_fraction: float
+) -> List[carla.Actor]:
+    """Spawn up to n vehicles at random spawn points, autopilot.
+
+    CARLA's vehicle blueprint pool is heavily 4-wheeled (~5x more car/truck/bus
+    BPs than motorcycle/bicycle BPs), so a naive round-robin produces a class
+    distribution dominated by 4-wheelers. This function partitions the BP pool
+    by wheel count and enforces a target fraction of two-wheelers.
+
+    Spawn assignment: build a list of target BPs (n_two two-wheeler picks +
+    n_four four-wheeler picks), then SHUFFLE that list so each spawn point
+    gets a uniformly-random BP. A previous iteration assigned BPs to spawn
+    points sequentially (first n_two points → two-wheelers, rest → 4-wheelers)
+    but that produced spatial class bias: under a deterministic seed, all
+    nearby spawn points around a given intersection could end up the same class.
+    """
     bp_lib = world.get_blueprint_library()
-    vehicle_bps = list(bp_lib.filter("vehicle.*"))
+    all_vehicle_bps = list(bp_lib.filter("vehicle.*"))
+    two_wheelers = [bp for bp in all_vehicle_bps if _bp_n_wheels(bp) == 2]
+    four_wheelers = [bp for bp in all_vehicle_bps if _bp_n_wheels(bp) >= 4]
+
+    n_two = int(round(n * two_wheeler_fraction))
+    n_four = n - n_two
+
+    # Build target BP list (n_two two-wheeler picks + n_four four-wheeler picks)
+    # using random.choice so each pick is independent. Then shuffle the combined
+    # list so two-wheelers and four-wheelers interleave across spawn points.
+    target_bps: List = []
+    if two_wheelers:
+        target_bps.extend(random.choice(two_wheelers) for _ in range(n_two))
+    if four_wheelers:
+        target_bps.extend(random.choice(four_wheelers) for _ in range(n_four))
+    random.shuffle(target_bps)
+
     spawn_points = list(world.get_map().get_spawn_points())
     random.shuffle(spawn_points)
 
     spawned: List[carla.Actor] = []
-    for i, sp in enumerate(spawn_points[:n]):
-        bp = vehicle_bps[i % len(vehicle_bps)]
+    n_two_actually = 0
+    n_four_actually = 0
+    for bp, sp in zip(target_bps, spawn_points):
         try:
             v = world.spawn_actor(bp, sp)
             v.set_autopilot(True, tm.get_port())
             spawned.append(v)
+            if _bp_n_wheels(bp) == 2:
+                n_two_actually += 1
+            else:
+                n_four_actually += 1
         except RuntimeError:
             continue
+
+    print(f"  pool: {len(two_wheelers)} two-wheeler BPs, "
+          f"{len(four_wheelers)} four-wheeler BPs")
+    print(f"  target: {n_two} two-wheelers + {n_four} four-wheelers; "
+          f"actually spawned: {n_two_actually} + {n_four_actually}")
     return spawned
 
 
-def spawn_walkers_global(
-    client: carla.Client, world: carla.World, n: int
+def spawn_walkers_near_intersections(
+    world: carla.World, n: int, intersections: List[Intersection],
+    max_distance_m: float
 ) -> Tuple[List[carla.Actor], List[carla.Actor]]:
-    """Spawn n walkers + AI controllers at navigation-mesh points across the whole map.
+    """Spawn n walkers + AI controllers at nav-mesh points NEAR intersections.
 
     Returns (walkers, controllers). Both must be destroyed at cleanup;
     controllers must be .stop()'d first.
+
+    Random map-wide nav-mesh spawning leaves most walkers far from any RSU
+    camera, producing few pedestrian labels. This filtered spawning constrains
+    walkers to within `max_distance_m` of an intersection center, ~3x more
+    pedestrians end up in the camera's 80m capture radius.
     """
     bp_lib = world.get_blueprint_library()
     walker_bps = list(bp_lib.filter("walker.pedestrian.*"))
     controller_bp = bp_lib.find("controller.ai.walker")
 
-    # 1. spawn walker actors at random nav-mesh points
+    if not walker_bps or not intersections:
+        return [], []
+
+    centers = [it.center for it in intersections]
+
+    # 1. sample nav-mesh points, accept only those near any intersection
     spawn_transforms = []
     attempts = 0
-    while len(spawn_transforms) < n and attempts < n * 5:
+    max_attempts = n * 30  # higher than unfiltered case because we reject most
+    while len(spawn_transforms) < n and attempts < max_attempts:
         loc = world.get_random_location_from_navigation()
         if loc is not None:
-            spawn_transforms.append(carla.Transform(loc))
+            for c in centers:
+                if loc.distance(c) <= max_distance_m:
+                    spawn_transforms.append(carla.Transform(loc))
+                    break
         attempts += 1
+    print(f"  nav-mesh sampling: {len(spawn_transforms)}/{n} accepted "
+          f"after {attempts} attempts (radius={max_distance_m:.0f} m)")
 
     walkers: List[carla.Actor] = []
     for t in spawn_transforms:
@@ -233,12 +305,38 @@ def spawn_walkers_global(
     return walkers, controllers
 
 
-def start_walker_ai(world: carla.World, controllers: List[carla.Actor]) -> None:
-    """Activate each walker controller. Call after at least one world.tick()."""
+def start_walker_ai(
+    world: carla.World, controllers: List[carla.Actor],
+    intersections: List[Intersection], max_distance_m: float
+) -> None:
+    """Activate each walker controller. Call after at least one world.tick().
+
+    Targets are constrained to be near an intersection so walkers don't simply
+    walk away from the RSU coverage areas immediately.
+    """
+    centers = [it.center for it in intersections] if intersections else []
     for c in controllers:
         try:
             c.start()
-            target = world.get_random_location_from_navigation()
+            target = None
+            # Try up to 20 random nav-mesh points; accept first one near any
+            # intersection. If none found, fall back to whatever was sampled.
+            fallback = None
+            for _ in range(20):
+                t = world.get_random_location_from_navigation()
+                if t is None:
+                    continue
+                fallback = fallback or t
+                if not centers:
+                    target = t
+                    break
+                for ic in centers:
+                    if t.distance(ic) <= max_distance_m:
+                        target = t
+                        break
+                if target is not None:
+                    break
+            target = target or fallback
             if target is not None:
                 c.go_to_location(target)
             c.set_max_speed(1.0 + random.random() * 0.5)
@@ -293,7 +391,8 @@ def capture_config(
     bp_lib,
     intersection: Intersection,
     light_idx: int,
-    weather_idx: int,
+    weather_name: str,
+    map_slug: str,
     K: np.ndarray,
     image_w: int, image_h: int, fov: float,
     n_frames: int, ticks_between: int, warmup_ticks: int,
@@ -304,9 +403,17 @@ def capture_config(
     Returns (frames_written, labels_written, per_class_counts)."""
     light = intersection.lights[light_idx]
     loc = light.get_location()
+    # Auto-yaw: face the intersection centroid. Sprint 1's "yaw=0 only" rule
+    # turned out to be specific to the multi-camera bug context — single-camera
+    # at arbitrary yaw is safe (verified via 12_rsu_video.py with --yaw 90).
+    # Without this, kavşaklara göre rastgele yönlere bakan kameralar üretiyor
+    # ve veri setinin yarısına yakını boş yola bakıyordu.
+    dx = intersection.center.x - loc.x
+    dy = intersection.center.y - loc.y
+    yaw_to_center = math.degrees(math.atan2(dy, dx))
     cam_transform = carla.Transform(
         carla.Location(x=loc.x, y=loc.y, z=loc.z + 6.0),
-        carla.Rotation(pitch=-25.0, yaw=0.0),  # yaw=0: proven safe (test 04)
+        carla.Rotation(pitch=-25.0, yaw=yaw_to_center),
     )
 
     bp = bp_lib.find("sensor.camera.rgb")
@@ -361,8 +468,11 @@ def capture_config(
                 labels.append((cls_id, xc, yc, w, h))
                 class_counts[cls_id] += 1
 
+            # Frame ID includes map slug so multi-map sweeps writing to the
+            # same dataset directory don't overwrite each other's frames.
             frame_id = (
-                f"t{intersection.id:02d}_l{light_idx}_w{weather_idx}_{cap_i:03d}"
+                f"{map_slug}_t{intersection.id:02d}_l{light_idx}_"
+                f"{weather_name}_{cap_i:03d}"
             )
             img_path = os.path.join(images_dir, f"{frame_id}.png")
             lbl_path = os.path.join(labels_dir, f"{frame_id}.txt")
@@ -415,7 +525,10 @@ def main(args) -> int:
     # Connect & load map
     client = connect(args.host, args.port)
     world = ensure_map(client, args.map)
-    print(f"map: {world.get_map().name}")
+    full_map_name = world.get_map().name
+    # "Carla/Maps/Town05" → "Town05"; strip "_Opt", "HD" suffixes for cleaner slug
+    map_slug = full_map_name.split("/")[-1].replace("_Opt", "").replace("HD", "")
+    print(f"map: {full_map_name}  (slug: {map_slug})")
 
     intersections = discover_intersections(world)
     print(f"discovered {len(intersections)} intersection(s)")
@@ -448,17 +561,27 @@ def main(args) -> int:
 
     try:
         with synchronous_mode(client) as (world, tm):
+            # Make TM behavior deterministic across runs given the same --seed.
+            try:
+                tm.set_random_device_seed(args.seed)
+            except Exception:
+                # Older CARLA builds may not expose this; non-fatal.
+                pass
             world.tick()
 
             print(f"spawning up to {args.vehicles} vehicles globally...")
-            vehicles = spawn_traffic_global(world, tm, args.vehicles)
+            vehicles = spawn_traffic_global(
+                world, tm, args.vehicles, args.two_wheeler_fraction
+            )
             print(f"  {len(vehicles)} vehicles in autopilot")
 
             if args.walkers > 0:
-                print(f"spawning up to {args.walkers} walkers globally...")
-                walkers, controllers = spawn_walkers_global(client, world, args.walkers)
+                print(f"spawning up to {args.walkers} walkers near intersections...")
+                walkers, controllers = spawn_walkers_near_intersections(
+                    world, args.walkers, intersections, args.walker_radius
+                )
                 world.tick()  # required before .start() on controllers
-                start_walker_ai(world, controllers)
+                start_walker_ai(world, controllers, intersections, args.walker_radius)
                 print(f"  {len(walkers)} walkers, {len(controllers)} controllers")
 
             # Let the world settle before the first config
@@ -485,7 +608,7 @@ def main(args) -> int:
                     img_d, lbl_d = images_train, labels_train
 
                 for li in light_ids:
-                    for wi, w_name in enumerate(weathers):
+                    for w_name in weathers:
                         config_i += 1
                         if not set_weather(world, w_name):
                             n_skipped_configs += 1
@@ -496,7 +619,9 @@ def main(args) -> int:
                         cfg_t0 = time.time()
                         frames_w, labels_w, cls_counts = capture_config(
                             world=world, bp_lib=bp_lib,
-                            intersection=target, light_idx=li, weather_idx=wi,
+                            intersection=target, light_idx=li,
+                            weather_name=w_name,
+                            map_slug=map_slug,
                             K=K, image_w=args.image_w, image_h=args.image_h, fov=args.fov,
                             n_frames=args.frames_per_config,
                             ticks_between=args.ticks_between_frames,
@@ -587,7 +712,18 @@ if __name__ == "__main__":
                    help="sim ticks between consecutive captures (decorrelates frames)")
     p.add_argument("--warmup-ticks-per-config", type=int, default=80)
     p.add_argument("--vehicles", type=int, default=100)
-    p.add_argument("--walkers", type=int, default=50)
+    p.add_argument("--walkers", type=int, default=80,
+                   help="walkers spawned near intersections (was 50; raised "
+                        "to compensate for class imbalance)")
+    p.add_argument("--two-wheeler-fraction", type=float, default=0.5,
+                   help="fraction of spawned vehicles that should be 2-wheeled "
+                        "(motorcycle/bicycle). CARLA's BP pool is heavily "
+                        "4-wheeled; without this, motorcycles+bicycles end up "
+                        "<10%% of the dataset. Default 0.5 → roughly equal mix.")
+    p.add_argument("--walker-radius", type=float, default=50.0,
+                   help="walkers spawn within this distance (m) of any "
+                        "intersection center; larger = wider coverage but "
+                        "fewer walkers visible to RSU cameras")
     p.add_argument("--val-stride", type=int, default=5,
                    help="intersection_idx %% val_stride == 0 → val. "
                         "Set to 1 to put everything in val (test-set use). "
