@@ -41,7 +41,22 @@ def main() -> int:
     p.add_argument("--out-dir", default="out/ablation")
     p.add_argument("--n-seeds", type=int, default=5)
     p.add_argument("--duration", type=float, default=120.0)
-    p.add_argument("--n-vehicles", type=int, default=30)
+    p.add_argument("--n-vehicles", type=int, default=60)
+    p.add_argument("--walker-counts", default="0,60,120",
+                   help="Comma-separated walker counts. Default '0,60,120' = "
+                        "medium scenario (map-wide pedestrian distribution, NHTSA-realistic "
+                        "urban density). Override to '0' for vehicle-only sweep, or to "
+                        "'60' to fix the walker axis while sweeping weather.")
+    p.add_argument("--weathers", default="ClearNoon",
+                   help="Comma-separated CARLA weather presets. Default 'ClearNoon' "
+                        "(single value = no weather sweep). For the weather ablation "
+                        "use 'ClearNoon,ClearSunset,HardRainNoon' — the three-preset "
+                        "axis recommended in v2xsim/weather.py.")
+    p.add_argument("--maps", default="Town05",
+                   help="Comma-separated CARLA map names. Default 'Town05' (single value "
+                        "= no map sweep). For the cross-map generalisation ablation use "
+                        "'Town05,Town10HD_Opt' — primary fine-tune map + downtown "
+                        "out-of-distribution map.")
     p.add_argument("--skip-existing", action="store_true")
     p.add_argument("--python", default=sys.executable,
                    help="Python interpreter to use for subprocesses")
@@ -56,70 +71,117 @@ def main() -> int:
         print(f"FAIL — detector not found: {args.detector}", file=sys.stderr)
         return 1
 
+    try:
+        walker_counts = [int(x.strip()) for x in args.walker_counts.split(",") if x.strip()]
+    except ValueError:
+        print(f"FAIL — --walker-counts must be comma-separated integers, got: {args.walker_counts}",
+              file=sys.stderr)
+        return 1
+    if not walker_counts:
+        walker_counts = [0]
+
+    weathers = [w.strip() for w in args.weathers.split(",") if w.strip()]
+    if not weathers:
+        weathers = ["ClearNoon"]
+
+    maps = [m.strip() for m in args.maps.split(",") if m.strip()]
+    if not maps:
+        maps = ["Town05"]
+
     os.makedirs(args.out_dir, exist_ok=True)
     log_dir = os.path.join(args.out_dir, "logs")
     os.makedirs(log_dir, exist_ok=True)
 
     penetrations = [0.0, 0.5, 1.0]
     seeds = list(range(args.n_seeds))
-    total = len(penetrations) * len(seeds)
+    total = (len(maps) * len(penetrations) * len(seeds)
+             * len(walker_counts) * len(weathers))
     done = 0
     crashed = 0
     skipped = 0
 
-    print(f"=== Subprocess sweep: {len(penetrations)} penetration × "
+    # Cell naming strategy: omit single-value axes from the filename so
+    # legacy sweeps keep their `pNNN_sNN.json` names. Multi-value axes
+    # are embedded in cell-name order: penetration, walkers, weather, map, seed.
+    walker_in_name = not (len(walker_counts) == 1 and walker_counts[0] == 0)
+    weather_in_name = len(weathers) > 1
+    map_in_name = len(maps) > 1
+
+    print(f"=== Subprocess sweep: {len(maps)} maps × {len(weathers)} weather × "
+          f"{len(walker_counts)} walker-counts × {len(penetrations)} penetration × "
           f"{len(seeds)} seeds = {total} cells of {args.duration:.0f}s each ===")
+    print(f"   maps:            {maps}")
+    print(f"   weather presets: {weathers}")
+    print(f"   walker counts:   {walker_counts}")
     print(f"   runner: {args.runner}")
     print(f"   python: {args.python}")
     print(f"   logs:   {log_dir}\\")
     sweep_t0 = time.time()
 
-    for p_value in penetrations:
-        for seed in seeds:
-            done += 1
-            cell_name = f"p{int(p_value * 100):03d}_s{seed:02d}"
-            out_path = os.path.join(args.out_dir, f"{cell_name}.json")
-            log_path = os.path.join(log_dir, f"{cell_name}.log")
+    # Loop order: map (outermost — switching maps is expensive, batch them),
+    # then weather, walker, penetration, seed (innermost).
+    for map_name in maps:
+        for weather in weathers:
+            for n_walkers in walker_counts:
+                for p_value in penetrations:
+                    for seed in seeds:
+                        done += 1
+                        parts = [f"p{int(p_value * 100):03d}"]
+                        if walker_in_name:
+                            parts.append(f"w{n_walkers:03d}")
+                        if weather_in_name:
+                            parts.append(weather)
+                        if map_in_name:
+                            parts.append(map_name)
+                        parts.append(f"s{seed:02d}")
+                        cell_name = "_".join(parts)
+                        out_path = os.path.join(args.out_dir, f"{cell_name}.json")
+                        log_path = os.path.join(log_dir, f"{cell_name}.log")
 
-            if args.skip_existing and os.path.exists(out_path):
-                print(f"[{done}/{total}] SKIP existing: {out_path}")
-                skipped += 1
-                continue
+                        if args.skip_existing and os.path.exists(out_path):
+                            print(f"[{done}/{total}] SKIP existing: {out_path}")
+                            skipped += 1
+                            continue
 
-            print(f"\n[{done}/{total}] === subprocess: p={p_value} seed={seed} → {out_path}")
-            cmd = [
-                args.python, args.runner,
-                "--detector", args.detector,
-                "--penetration", str(p_value),
-                "--seed", str(seed),
-                "--duration", str(args.duration),
-                "--n-vehicles", str(args.n_vehicles),
-                "--out", out_path,
-                "--quiet",
-            ]
-            cell_t0 = time.time()
-            try:
-                with open(log_path, "w", encoding="utf-8") as log_f:
-                    result = subprocess.run(
-                        cmd,
-                        stdout=log_f, stderr=subprocess.STDOUT,
-                        timeout=args.duration * 4.0 + 60.0,  # generous
-                    )
-                cell_wall = time.time() - cell_t0
-                if result.returncode == 0 and os.path.exists(out_path):
-                    print(f"   ok   ({cell_wall:.0f}s wall)  log: {log_path}")
-                else:
-                    crashed += 1
-                    print(f"   FAIL ({cell_wall:.0f}s wall, rc={result.returncode})  "
-                          f"log: {log_path}", file=sys.stderr)
-            except subprocess.TimeoutExpired:
-                crashed += 1
-                cell_wall = time.time() - cell_t0
-                print(f"   TIMEOUT ({cell_wall:.0f}s wall)  log: {log_path}",
-                      file=sys.stderr)
-            except Exception as e:
-                crashed += 1
-                print(f"   ERROR: {e}", file=sys.stderr)
+                        print(f"\n[{done}/{total}] === subprocess: p={p_value} "
+                              f"walkers={n_walkers} weather={weather} map={map_name} "
+                              f"seed={seed} → {out_path}")
+                        cmd = [
+                            args.python, args.runner,
+                            "--detector", args.detector,
+                            "--penetration", str(p_value),
+                            "--seed", str(seed),
+                            "--duration", str(args.duration),
+                            "--n-vehicles", str(args.n_vehicles),
+                            "--n-walkers", str(n_walkers),
+                            "--weather", weather,
+                            "--map", map_name,
+                            "--out", out_path,
+                            "--quiet",
+                        ]
+                        cell_t0 = time.time()
+                        try:
+                            with open(log_path, "w", encoding="utf-8") as log_f:
+                                result = subprocess.run(
+                                    cmd,
+                                    stdout=log_f, stderr=subprocess.STDOUT,
+                                    timeout=args.duration * 4.0 + 60.0,
+                                )
+                            cell_wall = time.time() - cell_t0
+                            if result.returncode == 0 and os.path.exists(out_path):
+                                print(f"   ok   ({cell_wall:.0f}s wall)  log: {log_path}")
+                            else:
+                                crashed += 1
+                                print(f"   FAIL ({cell_wall:.0f}s wall, rc={result.returncode})  "
+                                      f"log: {log_path}", file=sys.stderr)
+                        except subprocess.TimeoutExpired:
+                            crashed += 1
+                            cell_wall = time.time() - cell_t0
+                            print(f"   TIMEOUT ({cell_wall:.0f}s wall)  log: {log_path}",
+                                  file=sys.stderr)
+                        except Exception as e:
+                            crashed += 1
+                            print(f"   ERROR: {e}", file=sys.stderr)
 
     elapsed = time.time() - sweep_t0
     print(f"\n=== Subprocess sweep complete in {elapsed/60:.1f} min ===")

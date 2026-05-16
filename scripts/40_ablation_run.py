@@ -51,6 +51,12 @@ from v2xsim.hdv import HOSTILE_MIX, apply_mix_to_vehicles, disable_tm_collision_
 from v2xsim.intersections import discover_intersections
 from v2xsim.latency import LatencyModel
 from v2xsim.pdr import PDRModel
+from v2xsim.walker import (
+    spawn_walkers_near_intersections,
+    start_walker_controllers,
+    stop_walker_controllers,
+)
+from v2xsim.weather import apply_weather_preset
 
 
 # === Small helpers ========================================================
@@ -123,8 +129,63 @@ def run_single(args, penetration: float, seed: int) -> dict:
     client = connect(args.host, args.port)
     world = ensure_map(client, args.map)
 
+    # === Per-cell world reset =========================================
+    # CARLA 0.9.16 Windows binding leaves UE4 mesh "zombies" after
+    # subprocess actor destroy: the Python API reports actor count = 0
+    # but the geometry stays in the scene, complete with rigid-body
+    # colliders that newly-spawned vehicles can crash into. The result
+    # is inflated collision counts in subsequent cells.
+    #
+    # reload_world(False) is the official CARLA escape hatch — it
+    # reloads the current map while keeping the world settings
+    # (synchronous_mode + fixed_delta_seconds) intact. ~2-3 s per cell
+    # but eliminates inter-cell contamination entirely.
+    try:
+        client.reload_world(False)
+        # reload_world invalidates the world handle; fetch a fresh one.
+        world = client.get_world()
+    except Exception:
+        # Some old CARLA builds don't support keep_settings; fall back
+        # to the per-actor zombie sweep below.
+        pass
+
+    # Safety net: even after reload_world, very rarely a sensor or
+    # controller actor survives. Force-destroy anything in vehicle /
+    # walker / sensor / controller namespaces before we start.
+    try:
+        for actor in world.get_actors():
+            tid = actor.type_id
+            if tid.startswith(("vehicle.", "walker.", "sensor.",
+                                "controller.ai.walker")):
+                try:
+                    actor.destroy()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
     intersections = discover_intersections(world)
-    target_idx = [0, 3, 7]
+    # Pick three intersection slots for the RSU triangle. Original
+    # choice was the hard-coded [0, 3, 7] which works for Town05
+    # (signalised count ~15) and Town01 (~12 grid), but Town10HD_Opt is
+    # a small downtown with fewer signalised intersections — index 7
+    # raises IndexError. Adapt to the map: if at least 8 intersections
+    # exist, keep the legacy [0, 3, 7] for reproducibility with the
+    # earlier sweep; otherwise spread three picks evenly across the
+    # available range.
+    n_avail = len(intersections)
+    if n_avail >= 8:
+        target_idx = [0, 3, 7]
+    elif n_avail >= 3:
+        target_idx = [0, n_avail // 2, n_avail - 1]
+    else:
+        # Last resort — fewer than 3 signalised intersections is
+        # almost certainly the wrong map; fail loudly rather than
+        # silently producing a degenerate RSU triangle.
+        raise RuntimeError(
+            f"Map {args.map!r} has only {n_avail} signalised "
+            f"intersection(s); the V2X ablation requires at least 3."
+        )
     target_intersections = [intersections[i] for i in target_idx]
 
     broker = Broker(
@@ -140,10 +201,19 @@ def run_single(args, penetration: float, seed: int) -> dict:
     cavs: list = []
     collision_sensors: list = []
     collision_events: list = []
+    walkers: list = []
+    walker_controllers: list = []
     current_sim_time = [0.0]  # mutable closure for callback timestamps
 
     try:
         with synchronous_mode(client) as (world, tm):
+            world.tick()
+
+            # === Weather preset =======================================
+            # Apply BEFORE spawning RSUs/vehicles so cameras render
+            # under the target preset from frame 0. Validated against
+            # the WEATHER_PRESETS whitelist; ValueError on unknown.
+            apply_weather_preset(world, args.weather)
             world.tick()
 
             # === RSUs ==================================================
@@ -200,6 +270,36 @@ def run_single(args, penetration: float, seed: int) -> dict:
                 cavs.append(cav)
                 cav_actor_ids.add(v.id)
 
+            # === Walkers (pedestrians, optional VRU axis) ============
+            # Map-wide spawn (radius_m=None): pedestrians are distributed
+            # across the whole town, not artificially concentrated at the
+            # 3 RSU intersections. Realistic urban pedestrian density;
+            # V2X benefit is evaluated on whichever subset enters RSU
+            # camera frustums during the run.
+            #
+            # After spawn we MUST tick once before starting controllers,
+            # otherwise CARLA crashes on the first controller.start()
+            # call (cf. carla-simulator/carla #4350).
+            walker_actor_ids: set = set()
+            if args.n_walkers > 0:
+                intersection_centroids = []
+                for target in target_intersections:
+                    c = target.lights[0].get_location()
+                    intersection_centroids.append((c.x, c.y, c.z))
+                walkers, walker_controllers = spawn_walkers_near_intersections(
+                    client=client,
+                    world=world,
+                    intersection_centroids=intersection_centroids,
+                    n_walkers=args.n_walkers,
+                    radius_m=None,     # map-wide spawn
+                    seed=seed + 300,
+                )
+                walker_actor_ids = {w.id for w in walkers}
+                # Sync tick so the just-spawned walker transforms reach
+                # the client and the controllers have a valid actor to
+                # attach behaviour to.
+                world.tick()
+
             # === Collision sensors on EVERY vehicle ==================
             # We attach a collision sensor to every spawned vehicle, not
             # just CAVs, so that baseline (p=0) runs still report HDV-HDV
@@ -242,11 +342,26 @@ def run_single(args, penetration: float, seed: int) -> dict:
                 sensor = _attach_collision_sensor(world, v, _make_listener(v.id))
                 collision_sensors.append(sensor)
 
+            # Walkers also get collision sensors so we can count walker-hit
+            # events from the walker's side (vehicle's sensor will see it
+            # too, producing a paired event for the same physical collision
+            # — same dedup logic handles both).
+            for w in walkers:
+                sensor = _attach_collision_sensor(world, w, _make_listener(w.id))
+                collision_sensors.append(sensor)
+
             # === Warmup ================================================
             # Run the 40-tick warmup with TM collision detection still
             # ENABLED, so vehicles spread out from their spawn clusters
             # before we remove the avoidance layer.
             for _ in range(40):
+                world.tick()
+
+            # Walker AI controllers must start AFTER at least one tick
+            # has elapsed since their spawn, otherwise the walkers freeze
+            # in their default T-pose. The warmup above guarantees this.
+            if walker_controllers:
+                start_walker_controllers(walker_controllers, world)
                 world.tick()
 
             # === Disable TM collision detection (after warmup) =========
@@ -366,11 +481,31 @@ def run_single(args, penetration: float, seed: int) -> dict:
             # the loop — never touch the now-destroyed CARLA actors.
             cav_collisions = 0
             collisions_per_profile: dict[str, int] = {}
+            # VRU axis — classify each deduped event by whether either
+            # party is a walker. The dedup runs over ordered (a, b) pairs
+            # so a single physical vehicle↔walker collision shows up as
+            # exactly one deduped event (no double-count).
+            vru_collisions = 0
+            cav_hit_pedestrian = 0
+            hdv_hit_pedestrian = 0
             for sim_t, v_id, other_id in deduped_events:
                 if vehicle_is_cav.get(v_id, False):
                     cav_collisions += 1
                 p = vehicle_profile.get(v_id, "unknown")
                 collisions_per_profile[p] = collisions_per_profile.get(p, 0) + 1
+
+                # Is this collision a VRU collision (either side is a walker)?
+                v_is_walker = v_id in walker_actor_ids
+                other_is_walker = other_id in walker_actor_ids
+                if v_is_walker or other_is_walker:
+                    vru_collisions += 1
+                    # Which side is the vehicle? Classify CAV vs HDV
+                    # using the non-walker party.
+                    vehicle_party_id = other_id if v_is_walker else v_id
+                    if vehicle_is_cav.get(vehicle_party_id, False):
+                        cav_hit_pedestrian += 1
+                    else:
+                        hdv_hit_pedestrian += 1
             hdv_collisions = len(deduped_events) - cav_collisions
             decode_errors = sum(c.decode_errors for c in cavs)
 
@@ -382,6 +517,8 @@ def run_single(args, penetration: float, seed: int) -> dict:
                     "seed": seed,
                     "n_vehicles": len(vehicles),
                     "n_cavs": len(cavs),
+                    "n_walkers": len(walkers),
+                    "weather": args.weather,
                     "duration_s": args.duration,
                     "max_range_m": args.max_range,
                     "local_sensor_enabled": True,
@@ -400,6 +537,9 @@ def run_single(args, penetration: float, seed: int) -> dict:
                 "raw_collision_events": len(collision_events),
                 "cav_collision_count": cav_collisions,
                 "hdv_collision_count": hdv_collisions,
+                "vru_collision_count": vru_collisions,
+                "cav_hit_pedestrian_count": cav_hit_pedestrian,
+                "hdv_hit_pedestrian_count": hdv_hit_pedestrian,
                 "collisions_per_profile": collisions_per_profile,
                 "actions_taken": action_counts,
                 "phantom_brakes_suppressed": phantom_brakes_suppressed,
@@ -419,12 +559,24 @@ def run_single(args, penetration: float, seed: int) -> dict:
             for s in collision_sensors:
                 try: s.stop()
                 except Exception: pass
+            # Stop walker AI controllers BEFORE destroying them — same
+            # reason: a controller firing after its walker is gone has
+            # been observed to crash CARLA on Windows.
+            stop_walker_controllers(walker_controllers)
             try: world.tick()
             except Exception: pass
             for s in collision_sensors:
                 try: s.destroy()
                 except Exception: pass
             collision_sensors.clear()
+            for c in walker_controllers:
+                try: c.destroy()
+                except Exception: pass
+            walker_controllers.clear()
+            for w in walkers:
+                try: w.destroy()
+                except Exception: pass
+            walkers.clear()
             for r in rsus:
                 try: r.destroy()
                 except Exception: pass
@@ -447,6 +599,14 @@ def run_single(args, penetration: float, seed: int) -> dict:
             try: s.stop()
             except Exception: pass
             try: s.destroy()
+            except Exception: pass
+        try: stop_walker_controllers(walker_controllers)
+        except Exception: pass
+        for c in walker_controllers:
+            try: c.destroy()
+            except Exception: pass
+        for w in walkers:
+            try: w.destroy()
             except Exception: pass
         for r in rsus:
             try: r.destroy()
@@ -533,8 +693,16 @@ def main() -> int:
     # common
     p.add_argument("--duration", type=float, default=120.0,
                    help="simulation seconds per run (default 120 = 2 min)")
-    p.add_argument("--n-vehicles", type=int, default=30,
-                   help="vehicles to spawn (default 30 — 40 caused intersection congestion)")
+    p.add_argument("--n-vehicles", type=int, default=60,
+                   help="vehicles to spawn (default 60 — scenario B 'downtown realistic'. "
+                        "Higher values risk Town05 spawn-point exhaustion (~302 total, ~100 usable).)")
+    p.add_argument("--n-walkers", type=int, default=0,
+                   help="pedestrians to spawn (default 0 = vehicle-only baseline; "
+                        "60-120 enables the VRU axis with map-wide pedestrian distribution)")
+    p.add_argument("--weather", default="ClearNoon",
+                   help="CARLA weather preset (default ClearNoon = best-case visibility). "
+                        "Weather ablation axis defaults to ClearNoon/ClearSunset/HardRainNoon. "
+                        "Must be in WEATHER_PRESETS whitelist (see v2xsim/weather.py).")
     p.add_argument("--max-range", type=float, default=300.0)
     p.add_argument("--image-w", type=int, default=1280)
     p.add_argument("--image-h", type=int, default=720)
@@ -571,6 +739,10 @@ def main() -> int:
     print(f"wrote {args.out}")
     print(f"  collisions:                {metrics['collision_count']} "
           f"(cav={metrics['cav_collision_count']} hdv={metrics['hdv_collision_count']})")
+    if metrics['config'].get('n_walkers', 0) > 0:
+        print(f"  VRU collisions:            {metrics['vru_collision_count']} "
+              f"(cav-hit={metrics['cav_hit_pedestrian_count']} "
+              f"hdv-hit={metrics['hdv_hit_pedestrian_count']})")
     print(f"  phantom brakes suppressed: {metrics['phantom_brakes_suppressed']}")
     print(f"  actions taken:             {metrics['actions_taken']}")
     return 0
