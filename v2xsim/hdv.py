@@ -87,11 +87,46 @@ AGGRESSIVE = DriverProfile(
 )
 
 
+# === Hostile profile + mix ================================================
+#
+# `AGGRESSIVE` above is calibrated to be qualitatively realistic in mixed
+# traffic. For *safety ablations* we need stronger conflict generation —
+# without it, CARLA Traffic Manager's built-in collision avoidance keeps
+# the baseline at zero collisions and the V2X benefit is unmeasurable.
+#
+# `AGGRESSIVE_HOSTILE` and `HOSTILE_MIX` below are calibrated empirically
+# to produce non-zero baseline collision rates in 2-minute Town05 runs
+# (see Sprint 4 module 5 ablation deliverable). Use these only in the
+# ablation runner, never in user-facing demos.
+
+AGGRESSIVE_HOSTILE = DriverProfile(
+    name="aggressive_hostile",
+    speed_difference_pct=25.0,             # well over limit
+    distance_to_leading_m=2.0,             # tighter than ATTENTIVE (2.5) but not bumper-stuck.
+                                           # 0.8 caused mass pileups at spawn — physical contact
+                                           # at the spawn instant locked entire intersections.
+    ignore_lights_pct=50.0,
+    ignore_signs_pct=60.0,
+    ignore_vehicles_pct=10.0,              # 2× AGGRESSIVE — softened from 30 to limit collision-event flood
+    ignore_walkers_pct=20.0,
+    random_left_lanechange_pct=25.0,
+    random_right_lanechange_pct=25.0,
+)
+
+
 # Proposal §4.1.2 default population mix.
 DEFAULT_MIX: tuple[tuple[DriverProfile, float], ...] = (
     (ATTENTIVE,  0.70),
     (DISTRACTED, 0.20),
     (AGGRESSIVE, 0.10),
+)
+
+
+# Hostile mix for safety ablations only. 50/20/30 weighting.
+HOSTILE_MIX: tuple[tuple[DriverProfile, float], ...] = (
+    (ATTENTIVE,           0.50),
+    (DISTRACTED,          0.20),
+    (AGGRESSIVE_HOSTILE,  0.30),
 )
 
 
@@ -171,3 +206,28 @@ def apply_mix_to_vehicles(
     for v in vehicles:
         apply_profile_to_tm(tm, v, assignments[v.id])
     return {actor_id: p.name for actor_id, p in assignments.items()}
+
+
+# === TM collision detection control =======================================
+
+def disable_tm_collision_detection(tm: Any, vehicles: list) -> int:
+    """Tell Traffic Manager to ignore vehicle-vehicle collision avoidance
+    between every pair in the given list.
+
+    By default CARLA Traffic Manager applies its own collision-avoidance
+    layer on top of every autopilot decision — this keeps NPC traffic
+    looking sensible but hides driver-profile differences in the
+    collision-count metric. For safety ablations we disable this layer
+    so the per-profile ignore_*_pct parameters actually produce
+    measurable collisions.
+
+    Returns the number of (ordered) pairs configured.
+    """
+    n_pairs = 0
+    for v in vehicles:
+        for other in vehicles:
+            if v.id == other.id:
+                continue
+            tm.collision_detection(v, other, False)
+            n_pairs += 1
+    return n_pairs

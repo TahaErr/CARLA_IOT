@@ -179,6 +179,28 @@ class CarlaCAV:
         self.id = f"cav_{vehicle.id}"
         self._core = cav_core if cav_core is not None else CAVCore(cav_id=self.id)
         self.decode_errors = 0
+        self._alive = True
+
+    # --- lifecycle / liveness -----------------------------------------
+
+    def is_alive(self) -> bool:
+        """Check whether the underlying CARLA actor is still usable.
+
+        CARLA may destroy a Vehicle actor mid-simulation (driving off the
+        map, nav-mesh underflow, etc.). Once destroyed, any further method
+        call on the actor raises RuntimeError. This method returns False
+        as soon as we've observed either an `is_alive=False` actor attr
+        or a "destroyed actor" RuntimeError on a previous tick.
+        """
+        if not self._alive:
+            return False
+        try:
+            # CARLA 0.9.13+ exposes `actor.is_alive` directly.
+            if hasattr(self.actor, "is_alive") and not self.actor.is_alive:
+                self._alive = False
+        except Exception:
+            self._alive = False
+        return self._alive
 
     # --- setup ---------------------------------------------------------
 
@@ -192,8 +214,8 @@ class CarlaCAV:
         self,
         sim_time_ms: float,
         other_actors: Optional[list] = None,
-    ) -> CAVDecision:
-        """One decision cycle.
+    ) -> Optional[CAVDecision]:
+        """One decision cycle. Returns None if the underlying actor is dead.
 
         Steps:
           1. (optional) local-sensor synthesis from `other_actors`.
@@ -201,55 +223,66 @@ class CarlaCAV:
           3. Poll ego state from the CARLA actor.
           4. CAVCore.update() → CAVDecision.
 
+        Any "destroyed actor" RuntimeError raised by the CARLA actor is
+        caught, the CAV is marked dead via `_alive = False`, and None is
+        returned. Subsequent calls return None immediately. The caller
+        (typically the ablation runner) is responsible for pruning dead
+        CAVs from its own per-tick loop.
+
         Args:
             sim_time_ms: current simulation time in ms.
             other_actors: list of CARLA actors visible in the world.
                 Used only if local_sensor_enabled. The ego itself is
                 auto-skipped via its actor id.
-
-        Returns:
-            CAVDecision — caller decides how to apply `decision.action`.
         """
-        # === 1. Local sensor (optional) ============================
-        if self.local_sensor_enabled and other_actors:
-            ego_t = self.actor.get_transform()
-            local_dets = actors_in_cone(
-                ego_x=ego_t.location.x,
-                ego_y=ego_t.location.y,
-                ego_yaw_deg=ego_t.rotation.yaw,
-                actors=other_actors,
-                cone_range_m=self.local_sensor_range_m,
-                cone_angle_deg=self.local_sensor_angle_deg,
-                class_filter=self.local_sensor_class_filter,
-                ego_actor_id=self.actor.id,
-            )
-            self._core.ingest_local_detections(local_dets, sim_time_ms)
-
-        # === 2. Pull + ingest CPMs =================================
-        for tx in self.broker.deliveries_due(sim_time_ms, receiver_id=self.id):
-            try:
-                cpm = decode_cpm(tx.payload_bytes)
-                self._core.ingest_cpm(
-                    cpm,
-                    rsu_id=tx.sender_id,
-                    cpm_send_sim_time_ms=tx.sim_time_sent_ms,
-                    sim_time_ms=sim_time_ms,
+        if not self.is_alive():
+            return None
+        try:
+            # === 1. Local sensor (optional) ========================
+            if self.local_sensor_enabled and other_actors:
+                ego_t = self.actor.get_transform()
+                local_dets = actors_in_cone(
+                    ego_x=ego_t.location.x,
+                    ego_y=ego_t.location.y,
+                    ego_yaw_deg=ego_t.rotation.yaw,
+                    actors=other_actors,
+                    cone_range_m=self.local_sensor_range_m,
+                    cone_angle_deg=self.local_sensor_angle_deg,
+                    class_filter=self.local_sensor_class_filter,
+                    ego_actor_id=self.actor.id,
                 )
-            except Exception:
-                self.decode_errors += 1
+                self._core.ingest_local_detections(local_dets, sim_time_ms)
 
-        # === 3. Ego state ==========================================
-        ego_t = self.actor.get_transform()
-        ego_v = self.actor.get_velocity()
+            # === 2. Pull + ingest CPMs =============================
+            for tx in self.broker.deliveries_due(sim_time_ms, receiver_id=self.id):
+                try:
+                    cpm = decode_cpm(tx.payload_bytes)
+                    self._core.ingest_cpm(
+                        cpm,
+                        rsu_id=tx.sender_id,
+                        cpm_send_sim_time_ms=tx.sim_time_sent_ms,
+                        sim_time_ms=sim_time_ms,
+                    )
+                except Exception:
+                    self.decode_errors += 1
 
-        # === 4. Decision ===========================================
-        return self._core.update(
-            ego_x_m=ego_t.location.x,
-            ego_y_m=ego_t.location.y,
-            ego_vx_ms=ego_v.x,
-            ego_vy_ms=ego_v.y,
-            sim_time_ms=sim_time_ms,
-        )
+            # === 3. Ego state ======================================
+            ego_t = self.actor.get_transform()
+            ego_v = self.actor.get_velocity()
+
+            # === 4. Decision =======================================
+            return self._core.update(
+                ego_x_m=ego_t.location.x,
+                ego_y_m=ego_t.location.y,
+                ego_vx_ms=ego_v.x,
+                ego_vy_ms=ego_v.y,
+                sim_time_ms=sim_time_ms,
+            )
+        except RuntimeError as e:
+            if "destroyed actor" in str(e):
+                self._alive = False
+                return None
+            raise
 
     # --- diagnostics --------------------------------------------------
 

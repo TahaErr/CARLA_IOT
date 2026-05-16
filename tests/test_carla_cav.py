@@ -197,3 +197,51 @@ def test_carla_cav_module_imports_without_carla_sdk():
     assert hasattr(carla_cav, "CarlaCAV")
     assert hasattr(carla_cav, "actors_in_cone")
     assert hasattr(carla_cav, "carla_type_to_etsi")
+
+
+# === Destroyed-actor handling ============================================
+
+class _DestroyedActorMock:
+    """Mock vehicle whose get_transform() raises 'destroyed actor' error
+    (simulating CARLA's behaviour after backend destruction)."""
+    def __init__(self) -> None:
+        self.id = 999
+        self.type_id = "vehicle.tesla.model3"
+        self.is_alive = False
+
+    def get_transform(self):
+        raise RuntimeError(
+            "trying to operate on a destroyed actor; an actor's function "
+            "was called, but the actor is already destroyed."
+        )
+
+    def get_velocity(self):
+        return _MockLoc(0, 0)
+
+    def get_location(self):
+        raise RuntimeError("trying to operate on a destroyed actor")
+
+
+class _MinimalBroker:
+    """Tiny stand-in for Broker so CarlaCAV.tick can be exercised
+    without spinning up a full latency/PDR model. Returns no deliveries."""
+    def deliveries_due(self, sim_time_ms, receiver_id=None):
+        return []
+
+
+def test_carla_cav_handles_destroyed_actor_gracefully():
+    """tick() must catch 'destroyed actor' RuntimeError, mark the CAV
+    dead, and return None instead of propagating the exception. This
+    prevents one mid-sweep actor destruction from killing the whole
+    ablation runner."""
+    from v2xsim.carla_cav import CarlaCAV
+    actor = _DestroyedActorMock()
+    cav = CarlaCAV(vehicle=actor, broker=_MinimalBroker())  # type: ignore[arg-type]
+    # First call: catches the destroyed-actor error, returns None.
+    result = cav.tick(sim_time_ms=0.0)
+    assert result is None
+    # CAV is marked dead.
+    assert cav.is_alive() is False
+    # Subsequent calls also return None immediately (no exception raised).
+    result2 = cav.tick(sim_time_ms=100.0)
+    assert result2 is None

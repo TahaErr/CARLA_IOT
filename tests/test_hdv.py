@@ -17,13 +17,16 @@ import pytest
 
 from v2xsim.hdv import (
     AGGRESSIVE,
+    AGGRESSIVE_HOSTILE,
     ATTENTIVE,
     DISTRACTED,
     DEFAULT_MIX,
+    HOSTILE_MIX,
     DriverProfile,
     apply_mix_to_vehicles,
     apply_profile_to_tm,
     assign_profiles,
+    disable_tm_collision_detection,
 )
 
 
@@ -65,6 +68,12 @@ class _MockTM:
 
     def random_right_lanechange_percentage(self, v, pct):
         self._record("random_right_lanechange_pct", v, pct)
+
+    def collision_detection(self, ref, other, detect):
+        # Records (ref_id, other_id) so test can assert configured pairs.
+        self.calls.append(("collision_detection",
+                           getattr(ref, "id", -1),
+                           getattr(other, "id", -1)))
 
 
 # === Default mix sanity ===================================================
@@ -189,3 +198,58 @@ def test_apply_mix_deterministic_with_same_seed():
     names2 = apply_mix_to_vehicles(tm2, vs2, rng=np.random.default_rng(7))
     assert names1 == names2
     assert tm1.calls == tm2.calls
+
+
+# === HOSTILE_MIX + AGGRESSIVE_HOSTILE =====================================
+
+def test_hostile_mix_weights_sum_to_one():
+    total = sum(w for _, w in HOSTILE_MIX)
+    assert abs(total - 1.0) < 1e-9
+
+
+def test_aggressive_hostile_strictly_more_dangerous_than_aggressive():
+    """AGGRESSIVE_HOSTILE must dominate AGGRESSIVE on the rule-violation
+    axes, otherwise the safety ablation can't separate baseline from V2X.
+
+    NB: distance_to_leading_m is *not* tested as a danger axis any more:
+    bumper-close following (< 1 m) caused mass pileups at spawn time
+    in CARLA. The hostile profile now uses a spawn-safe distance.
+    """
+    assert AGGRESSIVE_HOSTILE.speed_difference_pct > AGGRESSIVE.speed_difference_pct
+    assert AGGRESSIVE_HOSTILE.ignore_lights_pct > AGGRESSIVE.ignore_lights_pct
+    assert AGGRESSIVE_HOSTILE.ignore_signs_pct > AGGRESSIVE.ignore_signs_pct
+    assert AGGRESSIVE_HOSTILE.ignore_vehicles_pct > AGGRESSIVE.ignore_vehicles_pct
+
+
+def test_hostile_mix_statistically_matches_50_20_30():
+    vehicles = [_MockVehicle(i) for i in range(1000)]
+    assignments = assign_profiles(vehicles, mix=HOSTILE_MIX,
+                                  rng=np.random.default_rng(0))
+    from collections import Counter
+    counts = Counter(p.name for p in assignments.values())
+    assert 450 < counts["attentive"] < 550
+    assert 150 < counts["distracted"] < 250
+    assert 250 < counts["aggressive_hostile"] < 350
+
+
+# === disable_tm_collision_detection =======================================
+
+def test_disable_collision_detection_configures_all_ordered_pairs():
+    """For N vehicles there are N*(N-1) ordered pairs to configure."""
+    tm = _MockTM()
+    vehicles = [_MockVehicle(i) for i in range(4)]
+    n_pairs = disable_tm_collision_detection(tm, vehicles)
+    assert n_pairs == 4 * 3  # ordered pairs, no self-pairs
+    coll_calls = [c for c in tm.calls if c[0] == "collision_detection"]
+    assert len(coll_calls) == 12
+    # Every (ref, other) with ref != other appears exactly once.
+    pairs = {(c[1], c[2]) for c in coll_calls}
+    expected = {(i, j) for i in range(4) for j in range(4) if i != j}
+    assert pairs == expected
+
+
+def test_disable_collision_detection_empty_list_is_noop():
+    tm = _MockTM()
+    n_pairs = disable_tm_collision_detection(tm, [])
+    assert n_pairs == 0
+    assert tm.calls == []
