@@ -213,11 +213,20 @@ def run_single(args, penetration: float, seed: int) -> dict:
             # bisect-step-2 callback exactly: capture only the IDs and
             # the simulation time. All per-vehicle metadata (is_cav,
             # profile, type) is looked up post-loop via local dicts.
+            #
+            # Hard cap on the event list size: unbounded growth was
+            # suspected of contributing to the late-sim crash pattern.
+            # 25,000 is above the highest raw count observed in
+            # successful runs (~20k), so realistic runs are unaffected.
+            COLLISION_EVENT_CAP = 25000
+
             vehicle_profile: dict[int, str] = dict(hdv_assignments)
             vehicle_is_cav: dict[int, bool] = {v.id: (v.id in cav_actor_ids) for v in vehicles}
 
             def _make_listener(vehicle_id: int):
                 def listener(event):
+                    if len(collision_events) >= COLLISION_EVENT_CAP:
+                        return  # cap reached — silent drop
                     try:
                         collision_events.append((
                             current_sim_time[0],
@@ -365,7 +374,7 @@ def run_single(args, penetration: float, seed: int) -> dict:
             hdv_collisions = len(deduped_events) - cav_collisions
             decode_errors = sum(c.decode_errors for c in cavs)
 
-            return {
+            metrics_dict = {
                 "config": {
                     "map": args.map,
                     "intersections": target_idx,
@@ -399,8 +408,41 @@ def run_single(args, penetration: float, seed: int) -> dict:
                 "hdv_profile_counts": _count_profile_assignments(hdv_assignments),
             }
 
+            # === In-sync-mode cleanup ===================================
+            # Suspected root cause of late-sim crashes: sensors firing
+            # on the CARLA thread while we're tearing down actors in
+            # async mode (outer finally below). We now stop sensor
+            # callbacks, drain the queue with one tick, then destroy
+            # actors — all while sync mode is still active so timing
+            # is deterministic. The outer finally still runs as a
+            # safety net for any actors that survive this block.
+            for s in collision_sensors:
+                try: s.stop()
+                except Exception: pass
+            try: world.tick()
+            except Exception: pass
+            for s in collision_sensors:
+                try: s.destroy()
+                except Exception: pass
+            collision_sensors.clear()
+            for r in rsus:
+                try: r.destroy()
+                except Exception: pass
+            rsus.clear()
+            for v in vehicles:
+                try: v.destroy()
+                except Exception: pass
+            vehicles.clear()
+            try: world.tick()
+            except Exception: pass
+
+            return metrics_dict
+
     finally:
-        # Cleanup in reverse spawn order.
+        # Safety-net cleanup for the exception path. Normal exits clear
+        # the lists inside the with-block (in-sync-mode cleanup above),
+        # so this is a no-op on the happy path. If an exception is raised
+        # before reaching that block, this catches the spawned actors.
         for s in collision_sensors:
             try: s.stop()
             except Exception: pass
