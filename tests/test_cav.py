@@ -350,3 +350,70 @@ def test_get_tracks_returns_sorted_immutable_snapshot():
     # Frozen dataclass — can't mutate.
     with pytest.raises(Exception):  # FrozenInstanceError
         tracks[0].x_m = 999.0
+
+
+# === I. Cooperative brake warning (Sprint 5 V2V / DENM) ===================
+
+def test_brake_warning_from_leader_ahead_triggers_cooperative_brake():
+    """A V2V hard-brake warning from a leader ahead, ego approaching it,
+    triggers a cooperative brake even with no perceived track at all."""
+    c = _core()
+    c.ingest_brake_warning(20.0, 0.0, 0.0, 0.0, sim_time_ms=0.0)
+    d = c.update(ego_x_m=0, ego_y_m=0, ego_vx_ms=10.0, ego_vy_ms=0.0,
+                 sim_time_ms=0.0)
+    assert d.cooperative_brake is True
+    assert d.action == Action.SOFT_BRAKE          # default brake_warning_action
+    # No perception involved — hysteresis suppression must not be implicated.
+    assert d.phantom_brake_suppressed is False
+
+
+def test_brake_warning_from_vehicle_behind_is_ignored():
+    """A warning from behind the ego is not a rear-end risk — ignore it."""
+    c = _core()
+    c.ingest_brake_warning(-20.0, 0.0, 0.0, 0.0, sim_time_ms=0.0)
+    d = c.update(0, 0, 10.0, 0.0, sim_time_ms=0.0)
+    assert d.cooperative_brake is False
+    assert d.action == Action.NONE
+
+
+def test_brake_warning_out_of_range_is_ignored():
+    c = _core(brake_warning_range_m=40.0)
+    c.ingest_brake_warning(60.0, 0.0, 0.0, 0.0, sim_time_ms=0.0)
+    d = c.update(0, 0, 10.0, 0.0, sim_time_ms=0.0)
+    assert d.cooperative_brake is False
+
+
+def test_brake_warning_ignored_when_ego_stopped():
+    """A stopped ego has no rear-end risk; the warning is moot."""
+    c = _core()
+    c.ingest_brake_warning(20.0, 0.0, 0.0, 0.0, sim_time_ms=0.0)
+    d = c.update(0, 0, 0.0, 0.0, sim_time_ms=0.0)
+    assert d.cooperative_brake is False
+
+
+def test_brake_warning_expires_after_ttl():
+    c = _core(brake_warning_ttl_ms=1000.0)
+    c.ingest_brake_warning(20.0, 0.0, 0.0, 0.0, sim_time_ms=0.0)
+    d = c.update(0, 0, 10.0, 0.0, sim_time_ms=1500.0)
+    assert d.cooperative_brake is False
+
+
+def test_track_hard_brake_dominates_cooperative_soft_brake():
+    """When a confirmed track already commands HARD_BRAKE, the cooperative
+    SOFT_BRAKE floor must not downgrade it — but the flag still reports the
+    warning was active."""
+    c = _core()
+    c.ingest_cpm(_cpm([_obj(x=5.0, y=0.0, conf=0.9)]), "A", 0.0, 0.0)
+    c.ingest_cpm(_cpm([_obj(x=5.0, y=0.0, conf=0.9)]), "A", 50.0, 50.0)
+    c.ingest_brake_warning(8.0, 0.0, 0.0, 0.0, sim_time_ms=50.0)
+    d = c.update(0, 0, 10.0, 0.0, sim_time_ms=50.0)
+    assert d.action == Action.HARD_BRAKE
+    assert d.cooperative_brake is True
+
+
+def test_register_station_alias_feeds_ingest_cpm():
+    """register_station is a drop-in for register_rsu (mobile V2V sender)."""
+    c = CAVCore(cav_id="cav_test")
+    c.register_station("cav_99", (0.0, 0.0))
+    c.ingest_cpm(_cpm([_obj(x=10.0, y=0.0)], station_id=99), "cav_99", 0.0, 0.0)
+    assert len(c.get_tracks()) == 1

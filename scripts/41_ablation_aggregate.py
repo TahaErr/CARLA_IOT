@@ -63,6 +63,13 @@ def _flatten_cell(metrics: dict) -> dict:
         "action_soft_brake":     actions.get("soft_brake", 0),
         "action_hard_brake":     actions.get("hard_brake", 0),
         "phantom_brakes_suppressed": metrics.get("phantom_brakes_suppressed", 0),
+        # Sprint 5 additions.
+        "cooperative_brakes":    metrics.get("cooperative_brakes", 0),
+        "frozen_vehicle_count":  metrics.get("frozen_vehicle_count", 0),
+        "v2v_enabled":           cfg.get("v2v_enabled", True),
+        "v2v_publishes_attempted": metrics.get("v2v_publishes_attempted", 0),
+        "v2v_deliveries_emitted": metrics.get("v2v_deliveries_emitted", 0),
+        "v2v_received_total":    metrics.get("v2v_received_total", 0),
         "dead_cav_count":        metrics.get("dead_cav_count", 0),
         "decode_errors":         metrics.get("decode_errors", 0),
         "publishes_emitted":     metrics.get("publishes_emitted", 0),
@@ -111,6 +118,7 @@ def _aggregate_by_cell(rows: list[dict]) -> list[dict]:
         "hdv_hit_pedestrian_count",
         "action_hard_brake", "action_soft_brake", "action_decelerate",
         "phantom_brakes_suppressed", "dead_cav_count",
+        "cooperative_brakes", "frozen_vehicle_count", "v2v_received_total",
         "cbr_mean", "wall_to_sim_ratio",
     ]
     for key in sorted(groups.keys()):
@@ -474,6 +482,12 @@ def _figure_map_vs_collisions(by_cell: list[dict], out_path: str):
 # === Main ===============================================================
 
 def main() -> int:
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
     p = argparse.ArgumentParser()
     p.add_argument("--in-dir", default="out/ablation")
     p.add_argument("--summary-csv", default=None,

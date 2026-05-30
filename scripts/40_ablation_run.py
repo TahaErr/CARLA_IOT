@@ -1,11 +1,20 @@
-"""scripts/40_ablation_run.py — Sprint 4 mini ablation runner.
+"""scripts/40_ablation_run.py — ablation runner (Sprint 4 + Sprint 5).
 
 Executes proposal §4.6's V2X-penetration sweep: 3 cells × N seeds in
-Town05 with 3 fixed RSUs (intersections 0/3/7), 40 vehicles, HDV mix
-(70/20/10 attentive/distracted/aggressive), 5-min sim per cell.
+Town05 with 3 fixed RSUs (intersections 0/3/7), 60 vehicles, 5-min sim
+per cell.
+
+Sprint 5 behaviour model (role-based):
+  - HDVs (human-driven): HOSTILE_MIX (50/20/30) with TM collision
+    avoidance DISABLED — the conflict generators.
+  - CAVs (V2X fleet): careful AI_REALISTIC profile, TM avoidance ENABLED,
+    plus cooperative perception (RSU CPM) AND V2V (CAV→CAV shared objects +
+    hard-brake intent).
+  - Collisions are counted once per pair; the vehicles involved are
+    immobilised in place (no runaway counter, no interpenetration).
 
 Penetration sweep:
-  - p = 0.0  : baseline. No CAVs; HDV-only traffic.
+  - p = 0.0  : baseline. No CAVs; all-HDV hostile traffic.
   - p = 0.5  : half the spawned vehicles are V2X-equipped CAVs.
   - p = 1.0  : every spawned vehicle is a CAV.
 
@@ -47,7 +56,14 @@ from v2xsim.carla_rsu import CarlaRSU
 from v2xsim.carla_utils import connect, ensure_map, synchronous_mode
 from v2xsim.cav import Action
 from v2xsim.compute_budget import unconstrained_profile
-from v2xsim.hdv import HOSTILE_MIX, apply_mix_to_vehicles, disable_tm_collision_detection
+from v2xsim.hdv import (
+    AI_REALISTIC,
+    ATTENTIVE,
+    HOSTILE_MIX,
+    apply_mix_to_vehicles,
+    apply_profile_to_tm,
+    disable_collision_detection_for,
+)
 from v2xsim.intersections import discover_intersections
 from v2xsim.latency import LatencyModel
 from v2xsim.pdr import PDRModel
@@ -65,21 +81,47 @@ def _distance_2d(p1, p2):
     return ((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2) ** 0.5
 
 
+def _select_spaced_spawn_points(spawn_points, n, rng, min_sep_m=6.0):
+    """Greedily pick up to `n` spawn points with a minimum pairwise spacing.
+
+    CARLA map spawn points can sit a couple of metres apart (parallel lanes,
+    junction stubs); filling them densely makes vehicles appear to spawn
+    *inside* each other. Enforcing a min separation removes that artefact
+    (Sprint 5 fix for item 3).
+    """
+    rng.shuffle(spawn_points)
+    chosen: list = []
+    for sp in spawn_points:
+        loc = sp.location
+        if all(
+            _distance_2d((loc.x, loc.y), (c.location.x, c.location.y)) >= min_sep_m
+            for c in chosen
+        ):
+            chosen.append(sp)
+            if len(chosen) >= n:
+                break
+    return chosen
+
+
 def _spawn_vehicles(world, tm, n, rng):
-    """Spawn up to `n` autopilot vehicles. Returns list of carla.Vehicle."""
+    """Spawn up to `n` autopilot vehicles at well-separated spawn points.
+
+    Uses `try_spawn_actor` (returns None on a blocked spawn instead of
+    raising) plus the min-separation filter above, so vehicles never
+    materialise overlapping. Returns list of carla.Vehicle.
+    """
     bp_lib = world.get_blueprint_library()
     vehicle_bps = list(bp_lib.filter("vehicle.*"))
     spawn_points = list(world.get_map().get_spawn_points())
-    rng.shuffle(spawn_points)
+    chosen = _select_spaced_spawn_points(spawn_points, n, rng)
     spawned = []
-    for i, sp in enumerate(spawn_points[:n]):
+    for i, sp in enumerate(chosen):
         bp = vehicle_bps[i % len(vehicle_bps)]
-        try:
-            v = world.spawn_actor(bp, sp)
-            v.set_autopilot(True, tm.get_port())
-            spawned.append(v)
-        except RuntimeError:
-            continue
+        v = world.try_spawn_actor(bp, sp)
+        if v is None:
+            continue  # blocked by a residual occupant — skip, never force
+        v.set_autopilot(True, tm.get_port())
+        spawned.append(v)
     return spawned
 
 
@@ -103,6 +145,73 @@ def _apply_decision(vehicle, action):
     elif action == Action.DECELERATE:
         vehicle.apply_control(carla.VehicleControl(throttle=0.2, brake=0.0))
     # Action.NONE: no override
+
+
+def _control_for(action):
+    """Return the VehicleControl override for an action, or None for NONE.
+
+    Same mapping as `_apply_decision` but returns the control so the caller
+    can collect them and apply all CAV overrides in ONE batched RPC
+    (`client.apply_batch`) instead of one `apply_control` call per CAV.
+    """
+    if action == Action.HARD_BRAKE:
+        return carla.VehicleControl(throttle=0.0, brake=1.0)
+    if action == Action.SOFT_BRAKE:
+        return carla.VehicleControl(throttle=0.0, brake=0.5)
+    if action == Action.DECELERATE:
+        return carla.VehicleControl(throttle=0.2, brake=0.0)
+    return None
+
+
+def _immobilize(vehicle, tm_port, freeze_physics=True):
+    """Bring a crashed vehicle to a permanent stop in place (Sprint 5 item 1).
+
+    After a collision the vehicle would otherwise keep its autopilot throttle
+    and grind/interpenetrate, and its collision sensor would keep firing —
+    inflating the count. We hand control back from the TM, slam the brakes +
+    handbrake, and (optionally) freeze its physics so it becomes a static
+    wreck. No actor destruction — that reintroduces the CARLA-0.9.16-Windows
+    mid-run destroy crash the Sprint 4 cleanup was built to avoid.
+    """
+    try:
+        vehicle.set_autopilot(False, tm_port)
+    except Exception:
+        pass
+    try:
+        vehicle.apply_control(
+            carla.VehicleControl(throttle=0.0, brake=1.0, hand_brake=True)
+        )
+    except Exception:
+        pass
+    if freeze_physics:
+        try:
+            vehicle.set_simulate_physics(False)
+        except Exception:
+            pass
+
+
+class _ActorSnap:
+    """Lightweight per-tick snapshot of an actor's pose + velocity.
+
+    The CAV local-sensor cone (`actors_in_cone`) only duck-types
+    `.id`, `.type_id`, `.get_location()`, `.get_velocity()`. Building one
+    snapshot per actor per tick and handing the *same* list to every CAV
+    turns the cone query pure-Python — instead of O(n_cav × n_actors) CARLA
+    round-trips per tick we pay O(n_actors). Big speedup at high penetration.
+    """
+    __slots__ = ("id", "type_id", "_loc", "_vel")
+
+    def __init__(self, actor_id, type_id, loc, vel):
+        self.id = actor_id
+        self.type_id = type_id
+        self._loc = loc
+        self._vel = vel
+
+    def get_location(self):
+        return self._loc
+
+    def get_velocity(self):
+        return self._vel
 
 
 def _count_profile_assignments(assignments: dict) -> dict:
@@ -206,7 +315,7 @@ def run_single(args, penetration: float, seed: int) -> dict:
     current_sim_time = [0.0]  # mutable closure for callback timestamps
 
     try:
-        with synchronous_mode(client) as (world, tm):
+        with synchronous_mode(client, dt=args.dt) as (world, tm):
             world.tick()
 
             # === Weather preset =======================================
@@ -230,30 +339,46 @@ def run_single(args, penetration: float, seed: int) -> dict:
                     fov_deg=args.fov,
                     confidence_threshold=args.conf,
                     device=args.device,
+                    sensor_tick_s=args.cpm_period_ms / 1000.0,
                 )
                 rsus.append(rsu)
                 light_loc = target.lights[0].get_location()
                 rsu_positions.append((light_loc.x, light_loc.y))
 
-            # === Vehicles + HDV mix ====================================
+            # === Vehicles ==============================================
             vehicles = _spawn_vehicles(world, tm, args.n_vehicles, rng)
             world.tick()
-            # HOSTILE_MIX (50/20/30) is calibrated for safety ablations
-            # where the baseline must have non-zero collisions for the
-            # V2X-benefit metric to be measurable.
-            hdv_assignments = apply_mix_to_vehicles(
-                tm, vehicles, mix=HOSTILE_MIX, rng=np_rng,
-            )
-            # IMPORTANT: TM collision-detection-disable is moved to AFTER
-            # warmup. Disabling at spawn time produced mass pileups
-            # because vehicles arrive packed and have no chance to spread
-            # before mutual avoidance is removed. Warm up first, then
-            # disable.
 
-            # === CAVs ==================================================
+            # === Role split: pick CAVs first, the rest are HDVs ========
+            # Sprint 5: behaviour is role-based.
+            #   * HDVs (human-driven) carry the HOSTILE_MIX and run with TM
+            #     collision-avoidance DISABLED (applied after warmup) — they
+            #     are the conflict generators that keep the baseline's
+            #     collision rate non-zero and measurable.
+            #   * CAVs (the V2X fleet) carry the careful AI_REALISTIC profile,
+            #     keep TM collision-avoidance ENABLED, and run the
+            #     cooperative-perception + V2V layer on top. --cav-attentive
+            #     swaps AI_REALISTIC for the flawless ATTENTIVE profile as an
+            #     ablation arm.
             n_cavs = int(round(penetration * len(vehicles)))
             cav_vehicles = rng.sample(vehicles, n_cavs) if n_cavs > 0 else []
-            cav_actor_ids: set = set()
+            cav_actor_ids: set = {v.id for v in cav_vehicles}
+            hdv_vehicles = [v for v in vehicles if v.id not in cav_actor_ids]
+
+            # HDV behaviour mix (TM avoidance disabled later, after warmup).
+            hdv_assignments = apply_mix_to_vehicles(
+                tm, hdv_vehicles, mix=HOSTILE_MIX, rng=np_rng,
+            )
+            # CAV driving profile — careful AI by default.
+            cav_profile = ATTENTIVE if args.cav_attentive else AI_REALISTIC
+            for v in cav_vehicles:
+                apply_profile_to_tm(tm, v, cav_profile)
+            # Combined per-vehicle profile map, for collision attribution.
+            vehicle_profile: dict[int, str] = dict(hdv_assignments)
+            for v in cav_vehicles:
+                vehicle_profile[v.id] = cav_profile.name
+
+            # === CAV wrappers (V2V enabled) ===========================
             for v in cav_vehicles:
                 cav = CarlaCAV(
                     vehicle=v,
@@ -261,6 +386,7 @@ def run_single(args, penetration: float, seed: int) -> dict:
                     local_sensor_enabled=True,
                     local_sensor_range_m=50.0,
                     local_sensor_angle_deg=90.0,
+                    enable_v2v=True,
                 )
                 for rsu_id, rsu_xy in zip(
                     [str(t.id) for t in target_intersections],
@@ -268,7 +394,10 @@ def run_single(args, penetration: float, seed: int) -> dict:
                 ):
                     cav.register_rsu(rsu_id, rsu_xy)
                 cavs.append(cav)
-                cav_actor_ids.add(v.id)
+
+            if not args.quiet:
+                print(f"   roles: {len(hdv_vehicles)} HDV (HOSTILE_MIX, avoidance OFF) + "
+                      f"{len(cav_vehicles)} CAV ({cav_profile.name}, avoidance ON, V2V)")
 
             # === Walkers (pedestrians, optional VRU axis) ============
             # Map-wide spawn (radius_m=None): pedestrians are distributed
@@ -320,8 +449,10 @@ def run_single(args, penetration: float, seed: int) -> dict:
             # successful runs (~20k), so realistic runs are unaffected.
             COLLISION_EVENT_CAP = 25000
 
-            vehicle_profile: dict[int, str] = dict(hdv_assignments)
+            # vehicle_profile already includes both HDV and CAV assignments.
             vehicle_is_cav: dict[int, bool] = {v.id: (v.id in cav_actor_ids) for v in vehicles}
+            # id → actor, so a crash can immobilise the colliding vehicles.
+            actor_by_id: dict[int, "carla.Actor"] = {v.id: v for v in vehicles}
 
             def _make_listener(vehicle_id: int):
                 def listener(event):
@@ -364,26 +495,47 @@ def run_single(args, penetration: float, seed: int) -> dict:
                 start_walker_controllers(walker_controllers, world)
                 world.tick()
 
-            # === Disable TM collision detection (after warmup) =========
-            # NOW the vehicles have dispersed; we can disable mutual
-            # avoidance so the per-driver ignore_*_pct knobs actually
-            # produce measurable collisions instead of being masked by
-            # TM's built-in safety net.
-            disable_tm_collision_detection(tm, vehicles)
+            # === Disable TM collision avoidance — HDVs only (after warmup) ===
+            # NOW the vehicles have dispersed; remove the avoidance safety
+            # net from HDVs (one-way, against every vehicle) so their
+            # profile violations produce measurable collisions. CAVs are
+            # NOT in the actor list, so they keep avoidance and behave as
+            # careful AVs (Sprint 5 item 4).
+            disable_collision_detection_for(tm, hdv_vehicles, vehicles)
             world.tick()
 
             # === Main loop =============================================
-            sim_dt_ms = 50.0
-            cpm_period_ticks = 2  # 100 ms CPM rate
-            n_ticks = int(args.duration / 0.05)
+            sim_dt_ms = args.dt * 1000.0
+            # CPM/V2V broadcast cadence. 100 ms = 10 Hz (ETSI default).
+            # Larger periods (e.g. 200 ms = 5 Hz) cut RSU rendering + YOLO
+            # load proportionally and are a legitimate lower broadcast rate.
+            cpm_period_ticks = max(1, round(args.cpm_period_ms / sim_dt_ms))
+            n_ticks = int(args.duration / args.dt)
 
             action_counts = {a.value: 0 for a in Action}
             phantom_brakes_suppressed = 0
+            cooperative_brakes = 0          # decisions raised by a V2V brake warning
             cbr_samples: list = []
             n_publishes_attempted = 0
             n_publishes_emitted = 0
             n_publishes_dropped = 0
-            dead_cav_ids: set = set()  # CAVs whose CARLA actor was destroyed
+            v2v_publishes_attempted = 0     # CAV→CAV broadcasts issued
+            v2v_deliveries_emitted = 0      # per-receiver V2V messages PDR-accepted
+            dead_cav_ids: set = set()       # CAVs destroyed OR immobilised by a crash
+            # cav.id → True if it hard-braked since its last V2V broadcast.
+            # Latching this (vs sampling only the publish tick) makes the
+            # hard-brake intent robust to the broadcast period.
+            cav_hard_brake_pending: dict = {}
+
+            # --- Collision incident tracking (Sprint 5 item 1) ---------
+            # Count each colliding pair once and immobilise the vehicles
+            # involved, so they stop accelerating / interpenetrating and
+            # stop re-firing their collision sensors (which is what inflated
+            # the old contact-frame count).
+            seen_collision_pairs: set = set()
+            collision_incidents: list = []  # (sim_t, a_id, b_id) — one per pair
+            frozen_ids: set = set()
+            processed_collision_idx = 0
 
             wall_t0 = time.time()
             for tick in range(n_ticks):
@@ -391,20 +543,34 @@ def run_single(args, penetration: float, seed: int) -> dict:
                 sim_time_ms = tick * sim_dt_ms
                 current_sim_time[0] = sim_time_ms
 
+                # One world snapshot per tick: every actor's pose + velocity
+                # in a SINGLE RPC. snap.find(id) then reads locally, replacing
+                # the hundreds of per-actor get_location/get_transform/
+                # get_velocity round-trips that made this loop RPC-latency-
+                # bound (low GPU/CPU, laggy UE4 window). Also yields cav_xy
+                # for the RSU + V2V range queries.
+                snap = world.get_snapshot()
+                cav_xy: dict = {}
+                for cav in cavs:
+                    if cav.id in dead_cav_ids:
+                        continue
+                    s = snap.find(cav.actor.id)
+                    if s is None:
+                        dead_cav_ids.add(cav.id)
+                        continue
+                    loc = s.get_transform().location
+                    cav_xy[cav.id] = (loc.x, loc.y)
+
                 # --- RSU publishes once per CPM period --------------
                 if tick % cpm_period_ticks == 0:
                     budget.reset_window()
                     for rsu, rsu_pos in zip(rsus, rsu_positions):
                         receivers: list = []
                         for cav in cavs:
-                            if cav.id in dead_cav_ids:
+                            xy = cav_xy.get(cav.id)
+                            if xy is None:
                                 continue
-                            try:
-                                v_loc = cav.actor.get_location()
-                            except RuntimeError:
-                                dead_cav_ids.add(cav.id)
-                                continue
-                            d = _distance_2d(rsu_pos, (v_loc.x, v_loc.y))
+                            d = _distance_2d(rsu_pos, xy)
                             if d <= args.max_range:
                                 receivers.append((cav.id, d))
                         n_publishes_attempted += 1
@@ -415,16 +581,29 @@ def run_single(args, penetration: float, seed: int) -> dict:
 
                 # --- CAV decisions every sim tick -------------------
                 if cavs:
-                    other_actors = [
-                        a for a in world.get_actors()
-                        if (a.type_id.startswith("vehicle.") or
-                            a.type_id.startswith("walker."))
-                    ]
+                    # Cone input built from the snapshot (no per-actor RPC).
+                    other_actors = []
+                    for a in vehicles + walkers:
+                        s = snap.find(a.id)
+                        if s is None:
+                            continue  # destroyed / not in this frame
+                        other_actors.append(_ActorSnap(
+                            a.id, a.type_id,
+                            s.get_transform().location, s.get_velocity()))
+                    control_cmds = []
                     for cav in cavs:
                         if cav.id in dead_cav_ids:
                             continue
+                        s = snap.find(cav.actor.id)
+                        if s is None:
+                            dead_cav_ids.add(cav.id)
+                            continue
+                        t = s.get_transform(); v = s.get_velocity()
+                        ego_state = (t.location.x, t.location.y,
+                                     t.rotation.yaw, v.x, v.y)
                         try:
-                            decision = cav.tick(sim_time_ms, other_actors)
+                            decision = cav.tick(sim_time_ms, other_actors,
+                                                ego_state=ego_state)
                         except RuntimeError as e:
                             if "destroyed actor" in str(e):
                                 dead_cav_ids.add(cav.id)
@@ -437,14 +616,74 @@ def run_single(args, penetration: float, seed: int) -> dict:
                         action_counts[decision.action.value] += 1
                         if decision.phantom_brake_suppressed:
                             phantom_brakes_suppressed += 1
-                        try:
-                            _apply_decision(cav.actor, decision.action)
-                        except RuntimeError:
-                            dead_cav_ids.add(cav.id)
+                        if decision.cooperative_brake:
+                            cooperative_brakes += 1
+                        if decision.action == Action.HARD_BRAKE:
+                            cav_hard_brake_pending[cav.id] = True
+                        ctrl = _control_for(decision.action)
+                        if ctrl is not None:
+                            control_cmds.append(
+                                carla.command.ApplyVehicleControl(cav.actor.id, ctrl))
+                    # Apply every CAV override in ONE batched RPC.
+                    if control_cmds:
+                        client.apply_batch(control_cmds)
+
+                # --- V2V broadcast once per CPM period --------------
+                # Each live CAV broadcasts (a) the objects it perceives and
+                # (b) its own pose + hard-brake intent to other CAVs in
+                # range, through the same broker (so PDR / latency / CBR
+                # apply identically to the RSU path). HDVs are non-connected
+                # and neither send nor receive. --no-v2v disables this leg
+                # (CAVs keep RSU CPMs + local sensor) for the V2I-only arm.
+                if cavs and not args.no_v2v and tick % cpm_period_ticks == 0:
+                    for cav in cavs:
+                        if cav.id not in cav_xy:
+                            continue
+                        sx, sy = cav_xy[cav.id]
+                        receivers = []
+                        for oid, opos in cav_xy.items():
+                            if oid == cav.id:
+                                continue
+                            d = _distance_2d((sx, sy), opos)
+                            if d <= args.v2v_range:
+                                receivers.append((oid, d))
+                        if not receivers:
+                            continue
+                        hard_brake = cav_hard_brake_pending.pop(cav.id, False)
+                        payload = cav.encode_v2v_message(sim_time_ms, hard_brake=hard_brake)
+                        if payload is None:
+                            continue
+                        v2v_publishes_attempted += 1
+                        v2v_deliveries_emitted += len(
+                            broker.publish(cav.id, payload, receivers, sim_time_ms)
+                        )
 
                 # --- CBR sample every sim-second --------------------
                 if tick % 20 == 0:
                     cbr_samples.append(broker.channel_busy_ratio(sim_time_ms=sim_time_ms))
+
+                # --- Process new collisions: count once, immobilise -
+                n_events_now = len(collision_events)
+                while processed_collision_idx < n_events_now:
+                    sim_t, a_id, b_id = collision_events[processed_collision_idx]
+                    processed_collision_idx += 1
+                    key = (a_id, b_id) if a_id <= b_id else (b_id, a_id)
+                    if key in seen_collision_pairs:
+                        continue
+                    seen_collision_pairs.add(key)
+                    collision_incidents.append((sim_t, a_id, b_id))
+                    # Immobilise any vehicle parties (walkers are left alone).
+                    for pid in (a_id, b_id):
+                        if pid in frozen_ids:
+                            continue
+                        veh = actor_by_id.get(pid)
+                        if veh is None:
+                            continue  # walker / untracked actor
+                        _immobilize(veh, tm.get_port())
+                        frozen_ids.add(pid)
+                        if pid in cav_actor_ids:
+                            # A wrecked CAV stops deciding / overriding / sending.
+                            dead_cav_ids.add(f"cav_{pid}")
 
                 # --- Progress every ~10 sim seconds -----------------
                 if (tick + 1) % 200 == 0 and not args.quiet:
@@ -453,7 +692,8 @@ def run_single(args, penetration: float, seed: int) -> dict:
                     print(f"    tick {tick+1:5d}/{n_ticks}  "
                           f"sim={sim:5.0f}s wall={wall:5.0f}s  "
                           f"emit={n_publishes_emitted:4d}  "
-                          f"collisions={len(collision_events):3d}")
+                          f"collisions={len(collision_incidents):3d}  "
+                          f"frozen={len(frozen_ids):3d}")
 
             wall_total = time.time() - wall_t0
 
@@ -461,21 +701,12 @@ def run_single(args, penetration: float, seed: int) -> dict:
             cbr_mean = float(np.mean(cbr_samples)) if cbr_samples else 0.0
             cbr_max = float(np.max(cbr_samples)) if cbr_samples else 0.0
 
-            # Apply per-pair 1-second deduplication after the simulation.
-            # CARLA's collision sensor fires once per contact frame while
-            # contact persists; for the reported metric we want distinct
-            # incidents, not contact-frame counts.
-            COLLISION_DEDUP_WINDOW_MS = 1000.0
-            last_collision: dict[tuple[int, int], float] = {}
-            deduped_events: list[tuple] = []
-            for ev in collision_events:
-                sim_t, v_id, other_id = ev
-                key = (v_id, other_id)
-                prev = last_collision.get(key)
-                if prev is not None and (sim_t - prev) < COLLISION_DEDUP_WINDOW_MS:
-                    continue
-                last_collision[key] = sim_t
-                deduped_events.append(ev)
+            # Sprint 5: collisions were already deduplicated *during* the
+            # loop into one incident per unordered pair (and the colliding
+            # vehicles were immobilised so a pair cannot re-fire). The raw
+            # contact-frame stream stays available as `collision_events` for
+            # diagnostics; `collision_incidents` is the reported metric.
+            deduped_events: list[tuple] = collision_incidents
 
             # Look up per-vehicle metadata from the local maps built before
             # the loop — never touch the now-destroyed CARLA actors.
@@ -489,7 +720,11 @@ def run_single(args, penetration: float, seed: int) -> dict:
             cav_hit_pedestrian = 0
             hdv_hit_pedestrian = 0
             for sim_t, v_id, other_id in deduped_events:
-                if vehicle_is_cav.get(v_id, False):
+                # CAV-involved if EITHER party is a CAV — a CAV rear-ended by
+                # an HDV still counts even though the HDV's sensor (v_id) may
+                # have reported the contact first. hdv_collision_count is then
+                # the HDV-only remainder.
+                if vehicle_is_cav.get(v_id, False) or vehicle_is_cav.get(other_id, False):
                     cav_collisions += 1
                 p = vehicle_profile.get(v_id, "unknown")
                 collisions_per_profile[p] = collisions_per_profile.get(p, 0) + 1
@@ -524,6 +759,10 @@ def run_single(args, penetration: float, seed: int) -> dict:
                     "local_sensor_enabled": True,
                     "local_sensor_range_m": 50.0,
                     "local_sensor_angle_deg": 90.0,
+                    "v2v_enabled": not args.no_v2v,
+                    "v2v_range_m": args.v2v_range,
+                    "cpm_period_ms": args.cpm_period_ms,
+                    "dt_s": args.dt,
                 },
                 "wall_seconds": wall_total,
                 "sim_seconds": args.duration,
@@ -543,9 +782,15 @@ def run_single(args, penetration: float, seed: int) -> dict:
                 "collisions_per_profile": collisions_per_profile,
                 "actions_taken": action_counts,
                 "phantom_brakes_suppressed": phantom_brakes_suppressed,
+                "cooperative_brakes": cooperative_brakes,
+                "frozen_vehicle_count": len(frozen_ids),
+                "v2v_publishes_attempted": v2v_publishes_attempted,
+                "v2v_deliveries_emitted": v2v_deliveries_emitted,
+                "v2v_received_total": sum(c.v2v_received for c in cavs),
                 "dead_cav_count": len(dead_cav_ids),
                 "decode_errors": decode_errors,
                 "hdv_profile_counts": _count_profile_assignments(hdv_assignments),
+                "cav_profile": cav_profile.name,
             }
 
             # === In-sync-mode cleanup ===================================
@@ -672,6 +917,14 @@ def run_sweep(args) -> int:
 # === Main ================================================================
 
 def main() -> int:
+    # Force UTF-8 console output so non-ASCII status chars never raise
+    # UnicodeEncodeError under Windows cp1252 when stdout is redirected.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
     p = argparse.ArgumentParser()
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=2000)
@@ -693,6 +946,11 @@ def main() -> int:
     # common
     p.add_argument("--duration", type=float, default=120.0,
                    help="simulation seconds per run (default 120 = 2 min)")
+    p.add_argument("--dt", type=float, default=0.05,
+                   help="fixed simulation timestep in seconds (default 0.05 = "
+                        "20 Hz). 0.1 (10 Hz) halves the tick count for ~2x "
+                        "wall-speed; CARLA sub-steps physics so collisions stay "
+                        "stable, but reaction/collision timing is coarser.")
     p.add_argument("--n-vehicles", type=int, default=60,
                    help="vehicles to spawn (default 60 — scenario B 'downtown realistic'. "
                         "Higher values risk Town05 spawn-point exhaustion (~302 total, ~100 usable).)")
@@ -704,12 +962,28 @@ def main() -> int:
                         "Weather ablation axis defaults to ClearNoon/ClearSunset/HardRainNoon. "
                         "Must be in WEATHER_PRESETS whitelist (see v2xsim/weather.py).")
     p.add_argument("--max-range", type=float, default=300.0)
+    p.add_argument("--cpm-period-ms", type=float, default=100.0,
+                   help="CPM/V2V broadcast period in ms (default 100 = 10 Hz, "
+                        "ETSI default). 200 = 5 Hz roughly halves RSU render + "
+                        "YOLO cost (~2x faster) at a realistic lower rate. Also "
+                        "sets the RSU camera sensor_tick.")
+    p.add_argument("--v2v-range", type=float, default=150.0,
+                   help="CAV→CAV V2V broadcast range in metres (default 150). "
+                        "Receivers beyond this are not scheduled.")
+    p.add_argument("--no-v2v", action="store_true",
+                   help="Disable the CAV→CAV V2V leg (V2I-only arm). CAVs keep "
+                        "RSU CPMs + their local sensor. Use to isolate V2V's "
+                        "marginal benefit vs RSU-only cooperative perception.")
     p.add_argument("--image-w", type=int, default=1280)
     p.add_argument("--image-h", type=int, default=720)
     p.add_argument("--fov", type=float, default=90.0)
     p.add_argument("--conf", type=float, default=0.25)
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--quiet", action="store_true")
+    p.add_argument("--cav-attentive", action="store_true",
+                   help="Ablation arm: give CAVs the flawless ATTENTIVE profile "
+                        "instead of the default careful AI_REALISTIC (small "
+                        "real-world error rate). HDVs always run HOSTILE_MIX.")
 
     args = p.parse_args()
 
@@ -729,6 +1003,7 @@ def main() -> int:
     try:
         metrics = run_single(args, penetration=args.penetration, seed=args.seed)
         metrics["status"] = "ok"
+        metrics.setdefault("config", {})["cav_attentive"] = args.cav_attentive
     except Exception as e:
         print(f"FAIL — run crashed: {e}", file=sys.stderr)
         return 1

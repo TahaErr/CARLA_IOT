@@ -18,6 +18,7 @@ import pytest
 from v2xsim.hdv import (
     AGGRESSIVE,
     AGGRESSIVE_HOSTILE,
+    AI_REALISTIC,
     ATTENTIVE,
     DISTRACTED,
     DEFAULT_MIX,
@@ -26,6 +27,7 @@ from v2xsim.hdv import (
     apply_mix_to_vehicles,
     apply_profile_to_tm,
     assign_profiles,
+    disable_collision_detection_for,
     disable_tm_collision_detection,
 )
 
@@ -251,5 +253,56 @@ def test_disable_collision_detection_configures_all_ordered_pairs():
 def test_disable_collision_detection_empty_list_is_noop():
     tm = _MockTM()
     n_pairs = disable_tm_collision_detection(tm, [])
+    assert n_pairs == 0
+    assert tm.calls == []
+
+
+# === AI_REALISTIC (Sprint 5) ==============================================
+
+def test_ai_realistic_is_careful_relative_to_hostile():
+    """The CAV profile must be far safer than the hostile HDV profile on
+    every rule-violation axis, and follow at a wider distance."""
+    assert AI_REALISTIC.ignore_lights_pct < AGGRESSIVE_HOSTILE.ignore_lights_pct
+    assert AI_REALISTIC.ignore_signs_pct < AGGRESSIVE_HOSTILE.ignore_signs_pct
+    assert AI_REALISTIC.distance_to_leading_m > AGGRESSIVE_HOSTILE.distance_to_leading_m
+    # Wider following gap than even the rule-compliant ATTENTIVE baseline.
+    assert AI_REALISTIC.distance_to_leading_m > ATTENTIVE.distance_to_leading_m
+
+
+def test_ai_realistic_never_ignores_vehicles_or_walkers():
+    """The AV defers vehicle/pedestrian safety to its (enabled) avoidance
+    layer — its driver profile must never deliberately ignore either."""
+    assert AI_REALISTIC.ignore_vehicles_pct == 0.0
+    assert AI_REALISTIC.ignore_walkers_pct == 0.0
+
+
+def test_ai_realistic_has_small_nonzero_error_rate():
+    """Not a flawless oracle: rare rule slips remain, but stay small (<=5%)."""
+    assert 0.0 < AI_REALISTIC.ignore_lights_pct <= 5.0
+    assert 0.0 < AI_REALISTIC.ignore_signs_pct <= 5.0
+
+
+# === disable_collision_detection_for (role-aware, Sprint 5) ===============
+
+def test_disable_collision_detection_for_only_configures_actors_as_ref():
+    """HDVs (actors) lose avoidance against all vehicles; CAVs (only in
+    `others`) are never configured as the avoiding party."""
+    tm = _MockTM()
+    hdvs = [_MockVehicle(i) for i in range(2)]       # ids 0,1
+    cavs = [_MockVehicle(i) for i in range(2, 4)]    # ids 2,3
+    all_vehicles = hdvs + cavs
+    n_pairs = disable_collision_detection_for(tm, hdvs, all_vehicles)
+    # 2 HDVs × (4-1) others = 6 ordered pairs.
+    assert n_pairs == 6
+    coll_calls = [c for c in tm.calls if c[0] == "collision_detection"]
+    ref_ids = {c[1] for c in coll_calls}
+    # Only HDV ids ever appear as the avoiding (ref) party.
+    assert ref_ids == {0, 1}
+
+
+def test_disable_collision_detection_for_empty_actors_is_noop():
+    tm = _MockTM()
+    cavs = [_MockVehicle(i) for i in range(3)]
+    n_pairs = disable_collision_detection_for(tm, [], cavs)
     assert n_pairs == 0
     assert tm.calls == []

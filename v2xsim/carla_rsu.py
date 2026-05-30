@@ -112,6 +112,7 @@ class CarlaRSU:
         fov_deg: float = 90.0,
         confidence_threshold: float = 0.25,
         device: str = "cuda:0",
+        sensor_tick_s: float = 0.0,
     ) -> None:
         """Spawn the camera + load the detector.
 
@@ -158,6 +159,12 @@ class CarlaRSU:
         bp.set_attribute("image_size_x", str(image_size[0]))
         bp.set_attribute("image_size_y", str(image_size[1]))
         bp.set_attribute("fov", str(fov_deg))
+        # Render only as often as the RSU consumes a frame (one per CPM
+        # period). In synchronous mode a camera with sensor_tick > 0 skips
+        # rendering on the in-between ticks, cutting GPU cost with no effect
+        # on the pipeline (the RSU already only reads a frame per CPM period).
+        if sensor_tick_s and sensor_tick_s > 0.0:
+            bp.set_attribute("sensor_tick", str(sensor_tick_s))
         transform = carla.Transform(
             carla.Location(x=loc.x, y=loc.y, z=loc.z + 6.0),
             carla.Rotation(pitch=-25.0, yaw=0.0),

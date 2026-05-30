@@ -114,6 +114,40 @@ AGGRESSIVE_HOSTILE = DriverProfile(
 )
 
 
+# === Careful-AV profile (Sprint 5) ========================================
+#
+# Sprint 5 separates the two vehicle roles. HDVs (human-driven) carry the
+# hostile mix above and run with Traffic Manager collision-avoidance
+# DISABLED — they are the conflict generators. CAVs (the V2X-equipped
+# autonomous fleet) are NOT hostile: they get this profile, keep TM
+# collision-avoidance ENABLED, and run the cooperative-perception layer on
+# top.
+#
+# `AI_REALISTIC` is deliberately not flawless. Production ADS still make
+# rare mistakes; we model that with a small rule-violation rate (~1%) so
+# the CAV is not an unrealistic oracle. Following distance is wider than
+# ATTENTIVE (cautious), and the AV never deliberately ignores vehicles or
+# pedestrians — its avoidance layer handles those. The exact percentages
+# are a first-pass calibration to refine against published ADS
+# disengagement / incident statistics.
+#
+# speed_difference_pct is left at 0.0 (drive at the limit). The sign
+# convention of CARLA's vehicle_percentage_speed_difference is ambiguous in
+# this codebase (see PROGRESS §11.4); 0.0 sidesteps it and is verified in
+# the Sprint 5 smoke test before any non-zero value is introduced.
+AI_REALISTIC = DriverProfile(
+    name="ai_realistic",
+    speed_difference_pct=0.0,
+    distance_to_leading_m=3.0,             # cautious — wider gap than ATTENTIVE (2.5)
+    ignore_lights_pct=1.0,                 # rare planning/perception slip
+    ignore_signs_pct=1.0,
+    ignore_vehicles_pct=0.0,               # avoidance layer (TM) handles vehicles
+    ignore_walkers_pct=0.0,                # never deliberately ignore pedestrians
+    random_left_lanechange_pct=0.5,
+    random_right_lanechange_pct=0.5,
+)
+
+
 # Proposal §4.1.2 default population mix.
 DEFAULT_MIX: tuple[tuple[DriverProfile, float], ...] = (
     (ATTENTIVE,  0.70),
@@ -229,5 +263,30 @@ def disable_tm_collision_detection(tm: Any, vehicles: list) -> int:
             if v.id == other.id:
                 continue
             tm.collision_detection(v, other, False)
+            n_pairs += 1
+    return n_pairs
+
+
+def disable_collision_detection_for(tm: Any, actors: list, others: list) -> int:
+    """Disable TM collision avoidance for `actors` only, against every actor
+    in `others` (one-way).
+
+    `tm.collision_detection(a, b, False)` is *directional*: it stops `a`
+    from avoiding `b` but leaves `b`'s avoidance of `a` untouched. Sprint 5
+    uses this to remove the safety net from HDVs alone: pass
+    `actors=hdvs, others=all_vehicles` so each hostile HDV drives without
+    avoidance (its profile violations become real collisions), while CAVs —
+    absent from `actors` — keep their avoidance enabled and behave as
+    careful AVs. This is the runner-side counterpart of assigning HDVs the
+    HOSTILE_MIX and CAVs the AI_REALISTIC profile.
+
+    Returns the number of (ordered) pairs configured.
+    """
+    n_pairs = 0
+    for a in actors:
+        for o in others:
+            if a.id == o.id:
+                continue
+            tm.collision_detection(a, o, False)
             n_pairs += 1
     return n_pairs
