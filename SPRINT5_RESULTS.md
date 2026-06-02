@@ -184,3 +184,52 @@ fidelity therefore still needs `--dt 0.1` (~2.3×) or a multi-day budget.
 
 Sweep wrapper `42_` adds `--max-hours` (deadline), `--carla-exe` +
 `--restart-after-fails` (server watchdog), and passes the above through.
+
+---
+
+## 9. Checkpoint & data inventory (saved 2026-06-02)
+
+Runs stopped and all results aggregated. **166 cells saved**; each directory
+below has `summary.csv`, `summary_by_cell.csv`, and `figures/`.
+
+| Directory (`out/`) | Contents | Cells | Fidelity |
+|---|---|---|---|
+| `ablation_sprint5_full/v2v` | Town05 (full) + Town10 (partial) V2V-on | 69 | max (10 Hz, dt 0.05) |
+| `ablation_sprint5_full/noV2V` | Town05 (full) V2I-only | 45 | max |
+| `ablation_sprint5_full/noV2V_t10` | Town10 V2I-only, p0/p0.5, CN+CS | 19 | max |
+| `ablation_sprint5_p09/v2v` | **p=0.9 Town05 V2V-on** | 15 | max |
+| `ablation_sprint5_p09/noV2V` | **p=0.9 Town05 V2I-only** | 14 | max |
+| `ablation_sprint5_t10p100/v2v` | Town10 p=1.0 V2V (timed-out partial) | 2 | max (abandoned) |
+| `ablation_sprint5_t10p100_fast/v2v` | Town10 p=1.0 V2V | 2 | reduced (5 Hz, dt 0.1) |
+
+**Status by goal**
+- **Complete (max fidelity):** Town05 V2V on/off across p = 0 / 0.5 / **0.9** / 1.0;
+  Town10 cross-map at p0/p0.5 (both phases) and p1.0 (V2V, n=4 partial).
+- **Partial:** Town10 p=1.0 at the reduced 5 Hz + dt 0.1 tier (2/15 V2V before
+  stop; the tier works — first cell 446 s, no timeout). noV2V not started.
+- **Not attempted:** Town01.
+
+**New result — p=0.9 Town05** (mean over weather x seeds; total / CAV-involved):
+
+| | Collisions | Hard-brakes | n |
+|---|---|---|---|
+| V2I-only | 19.4 / 19.1 | 6,047 | 14 |
+| +V2V | **5.6 / 5.1** | 58,455 | 15 |
+
+The +V2V Town05 curve is monotone: **27.5 -> 15.5 -> 5.6 -> 3.2** (p = 0 / 0.5 /
+0.9 / 1.0). V2V's apparent benefit peaks at p=0.9 (-71%), but the *V2I-only*
+baseline there (19.4) is non-monotonic vs p=0.5 (14.7) and likely high-variance
+(n=14) -> treat the -71% as suggestive pending more seeds.
+
+**To resume the Town10 p=1.0 reduced-tier run** (resumable via `--skip-existing`):
+```
+python scripts/42_ablation_sweep_subprocess.py --detector <best.pt> \
+  --maps Town10HD_Opt --penetrations 1.0 --weathers ClearNoon,ClearSunset,HardRainNoon \
+  --walker-counts 60 --n-vehicles 60 --duration 120 --n-seeds 5 \
+  --cpm-period-ms 200 --dt 0.1 --cell-timeout-s 1200 --carla-exe <CarlaUE4.exe> \
+  --skip-existing --out-dir out/ablation_sprint5_t10p100_fast/v2v
+# then the same with --no-v2v --out-dir .../noV2V
+```
+(Requires CARLA at **Epic** quality — Low crashes on walker spawn.)
+
+Note: the CARLA server (Epic) was left running; close it when done.
