@@ -470,3 +470,18 @@ def test_distance_based_safety_fallback():
     d = c.update(0, 0, 1.0, 0.0, sim_time_ms=50.0)
     assert d.action == Action.DECELERATE
 
+
+def test_ego_self_exclusion():
+    """Verify that tracks closer than 3.0 m to the ego vehicle center are ignored (self-exclusion)."""
+    c = _core()
+    # Confirm track that is extremely close to the ego vehicle center (e.g. x = 1.0 m)
+    c.ingest_cpm(_cpm([_obj(x=1.0, y=0.0, conf=0.9)]), "A", 0.0, 0.0)
+    c.ingest_cpm(_cpm([_obj(x=1.0, y=0.0, conf=0.9)]), "A", 50.0, 50.0)
+    
+    # Ego at (0, 0). The track is at x = 1.0 m, which is in front and within same lane.
+    # It would normally trigger HARD_BRAKE via distance fallback (1.0 m <= 4.0 m).
+    # But self-exclusion skips it entirely.
+    d = c.update(0, 0, 1.0, 0.0, sim_time_ms=50.0)
+    assert d.action == Action.NONE
+
+

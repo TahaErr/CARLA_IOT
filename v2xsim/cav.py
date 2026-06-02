@@ -393,6 +393,12 @@ class CAVCore:
             hx, hy = 1.0, 0.0
 
         for track in self._tracks.values():
+            # Ego self-exclusion: ignore tracks representing the CAV itself (RSU ghost reflections)
+            dx_ego = track.x_m - ego_x_m
+            dy_ego = track.y_m - ego_y_m
+            if math.hypot(dx_ego, dy_ego) < 3.0:
+                continue
+
             current_conf = self._current_confidence(track, sim_time_ms)
             confirmed = self._is_confirmed(track, sim_time_ms)
             snap = self._track_snapshot(track, sim_time_ms, current_conf, confirmed)
