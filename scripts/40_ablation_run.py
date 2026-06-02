@@ -537,9 +537,19 @@ def run_single(args, penetration: float, seed: int) -> dict:
             frozen_ids: set = set()
             processed_collision_idx = 0
 
+            # --- Per-section profiler (always accumulates; printed if --profile) ---
+            prof: dict = {}
+
+            def _lap(key, t_prev):
+                now = time.perf_counter()
+                prof[key] = prof.get(key, 0.0) + (now - t_prev)
+                return now
+
             wall_t0 = time.time()
             for tick in range(n_ticks):
+                _t = time.perf_counter()
                 world.tick()
+                _t = _lap("1_world_tick", _t)
                 sim_time_ms = tick * sim_dt_ms
                 current_sim_time[0] = sim_time_ms
 
@@ -560,6 +570,7 @@ def run_single(args, penetration: float, seed: int) -> dict:
                         continue
                     loc = s.get_transform().location
                     cav_xy[cav.id] = (loc.x, loc.y)
+                _t = _lap("2_snapshot", _t)
 
                 # --- RSU publishes once per CPM period --------------
                 if tick % cpm_period_ticks == 0:
@@ -578,6 +589,7 @@ def run_single(args, penetration: float, seed: int) -> dict:
                             n_publishes_emitted += 1
                         else:
                             n_publishes_dropped += 1
+                _t = _lap("3_rsu_yolo", _t)
 
                 # --- CAV decisions every sim tick -------------------
                 if cavs:
@@ -590,6 +602,7 @@ def run_single(args, penetration: float, seed: int) -> dict:
                         other_actors.append(_ActorSnap(
                             a.id, a.type_id,
                             s.get_transform().location, s.get_velocity()))
+                    _t = _lap("4_actors_build", _t)
                     control_cmds = []
                     for cav in cavs:
                         if cav.id in dead_cav_ids:
@@ -627,6 +640,7 @@ def run_single(args, penetration: float, seed: int) -> dict:
                     # Apply every CAV override in ONE batched RPC.
                     if control_cmds:
                         client.apply_batch(control_cmds)
+                    _t = _lap("5_cav_decide", _t)
 
                 # --- V2V broadcast once per CPM period --------------
                 # Each live CAV broadcasts (a) the objects it perceives and
@@ -657,6 +671,7 @@ def run_single(args, penetration: float, seed: int) -> dict:
                         v2v_deliveries_emitted += len(
                             broker.publish(cav.id, payload, receivers, sim_time_ms)
                         )
+                _t = _lap("6_v2v", _t)
 
                 # --- CBR sample every sim-second --------------------
                 if tick % 20 == 0:
@@ -684,6 +699,7 @@ def run_single(args, penetration: float, seed: int) -> dict:
                         if pid in cav_actor_ids:
                             # A wrecked CAV stops deciding / overriding / sending.
                             dead_cav_ids.add(f"cav_{pid}")
+                _t = _lap("7_collision", _t)
 
                 # --- Progress every ~10 sim seconds -----------------
                 if (tick + 1) % 200 == 0 and not args.quiet:
@@ -696,6 +712,16 @@ def run_single(args, penetration: float, seed: int) -> dict:
                           f"frozen={len(frozen_ids):3d}")
 
             wall_total = time.time() - wall_t0
+
+            # === Profile breakdown =====================================
+            prof_total = sum(prof.values()) or 1e-9
+            if args.profile:
+                print(f"\n=== PROFILE (loop wall {wall_total:.1f}s, "
+                      f"{n_ticks} ticks, {wall_total/n_ticks*1000:.1f} ms/tick) ===")
+                for k in sorted(prof):
+                    sec = prof[k]
+                    print(f"  {k:18s} {sec:8.1f}s  {sec/prof_total*100:5.1f}%  "
+                          f"{sec/n_ticks*1000:6.2f} ms/tick")
 
             # === Aggregation ===========================================
             cbr_mean = float(np.mean(cbr_samples)) if cbr_samples else 0.0
@@ -791,6 +817,7 @@ def run_single(args, penetration: float, seed: int) -> dict:
                 "decode_errors": decode_errors,
                 "hdv_profile_counts": _count_profile_assignments(hdv_assignments),
                 "cav_profile": cav_profile.name,
+                "profile_seconds": {k: round(v, 3) for k, v in prof.items()},
             }
 
             # === In-sync-mode cleanup ===================================
@@ -980,6 +1007,11 @@ def main() -> int:
     p.add_argument("--conf", type=float, default=0.25)
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--quiet", action="store_true")
+    p.add_argument("--profile", action="store_true",
+                   help="Time each per-tick loop section (world tick, snapshot, "
+                        "RSU/YOLO, actor build, CAV decide, V2V, collisions) and "
+                        "print a breakdown at the end. Diagnostic for where wall "
+                        "time goes.")
     p.add_argument("--cav-attentive", action="store_true",
                    help="Ablation arm: give CAVs the flawless ATTENTIVE profile "
                         "instead of the default careful AI_REALISTIC (small "
