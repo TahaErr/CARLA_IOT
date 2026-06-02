@@ -77,10 +77,14 @@ def main() -> int:
                    help="Pass --cav-attentive to each child run "
                         "(CAVs get ATTENTIVE driving; HDVs stay on HOSTILE_MIX). "
                         "Use together with --penetrations 0.9 for the fleet-transition sweep.")
+    p.add_argument("--hdv-mix", choices=["hostile", "default"], default="hostile",
+                   help="Pass --hdv-mix to each child run.")
     p.add_argument("--no-v2v", action="store_true",
                    help="Pass --no-v2v to each child run (V2I-only arm: CAVs keep "
                         "RSU CPMs + local sensor but no CAV↔CAV V2V). Use to run the "
                         "V2V-isolation phase into a separate --out-dir.")
+    p.add_argument("--no-v2x", action="store_true",
+                   help="Pass --no-v2x to each child run (V2V-only arm: CAVs keep V2V but no RSU CPMs).")
     p.add_argument("--cpm-period-ms", type=float, default=100.0,
                    help="Pass-through CPM/V2V broadcast period in ms (default 100 = 10 Hz).")
     p.add_argument("--dt", type=float, default=0.05,
@@ -262,6 +266,9 @@ def main() -> int:
             cmd.append("--cav-attentive")
         if args.no_v2v:
             cmd.append("--no-v2v")
+        if args.no_v2x:
+            cmd.append("--no-v2x")
+        cmd.extend(["--hdv-mix", args.hdv_mix])
         cell_t0 = time.time()
         cell_ok = False
         try:

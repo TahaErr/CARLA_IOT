@@ -68,7 +68,7 @@ DISTRACTED = DriverProfile(
     distance_to_leading_m=2.0,
     ignore_lights_pct=5.0,
     ignore_signs_pct=10.0,
-    ignore_vehicles_pct=10.0,
+    ignore_vehicles_pct=20.0,
     ignore_walkers_pct=10.0,
     random_left_lanechange_pct=2.0,
     random_right_lanechange_pct=2.0,
@@ -107,7 +107,7 @@ AGGRESSIVE_HOSTILE = DriverProfile(
                                            # at the spawn instant locked entire intersections.
     ignore_lights_pct=50.0,
     ignore_signs_pct=60.0,
-    ignore_vehicles_pct=10.0,              # 2× AGGRESSIVE — softened from 30 to limit collision-event flood
+    ignore_vehicles_pct=40.0,              # Increased to 40% to generate more conflicts with TM avoidance enabled
     ignore_walkers_pct=20.0,
     random_left_lanechange_pct=25.0,
     random_right_lanechange_pct=25.0,

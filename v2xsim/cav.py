@@ -174,6 +174,7 @@ class CAVCore:
         brake_warning_range_m: float = 40.0,
         brake_warning_cone_deg: float = 90.0,
         brake_warning_action: Action = Action.SOFT_BRAKE,
+        brake_warning_lateral_m: float = 2.0,
     ):
         """Args:
             cav_id: simulation identifier (used only in diagnostics).
@@ -211,12 +212,13 @@ class CAVCore:
         self.brake_warning_range_m = brake_warning_range_m
         self.brake_warning_cone_deg = brake_warning_cone_deg
         self.brake_warning_action = brake_warning_action
+        self.brake_warning_lateral_m = brake_warning_lateral_m
 
         self._tracks: dict[int, _MutableTrack] = {}
         self._next_track_id = 1
         self._rsu_positions: dict[str, tuple[float, float]] = {}
-        # Received V2V hard-brake warnings: (x, y, vx, vy, sim_time_ms).
-        self._brake_warnings: list[tuple[float, float, float, float, float]] = []
+        # Received V2V hard-brake warnings: (x, y, vx, vy, yaw_deg, sim_time_ms).
+        self._brake_warnings: list[tuple[float, float, float, float, float, float]] = []
 
     # --- setup ---------------------------------------------------------
 
@@ -244,7 +246,8 @@ class CAVCore:
         sender_y_m: float,
         sender_vx_ms: float,
         sender_vy_ms: float,
-        sim_time_ms: float,
+        sender_yaw_deg: float = 0.0,
+        sim_time_ms: float = 0.0,
     ) -> None:
         """Record a V2V hard-brake warning from another vehicle (Sprint 5).
 
@@ -254,7 +257,7 @@ class CAVCore:
         for the perception hysteresis to confirm a track.
         """
         self._brake_warnings.append(
-            (sender_x_m, sender_y_m, sender_vx_ms, sender_vy_ms, sim_time_ms)
+            (sender_x_m, sender_y_m, sender_vx_ms, sender_vy_ms, sender_yaw_deg, sim_time_ms)
         )
 
     # --- ingest --------------------------------------------------------
@@ -363,6 +366,7 @@ class CAVCore:
         ego_vx_ms: float,
         ego_vy_ms: float,
         sim_time_ms: float,
+        ego_yaw_deg: Optional[float] = None,
     ) -> CAVDecision:
         """One decision cycle: prune, compute TTC, apply hysteresis,
         return the most aggressive surviving action.
@@ -377,6 +381,17 @@ class CAVCore:
         triggering_ttc: Optional[float] = None
         phantom_brake_suppressed = False
 
+        ego_speed = math.hypot(ego_vx_ms, ego_vy_ms)
+        if ego_yaw_deg is not None:
+            ego_yaw_rad = math.radians(ego_yaw_deg)
+            hx = math.cos(ego_yaw_rad)
+            hy = math.sin(ego_yaw_rad)
+        elif ego_speed >= 0.5:
+            hx = ego_vx_ms / ego_speed
+            hy = ego_vy_ms / ego_speed
+        else:
+            hx, hy = 1.0, 0.0
+
         for track in self._tracks.values():
             current_conf = self._current_confidence(track, sim_time_ms)
             confirmed = self._is_confirmed(track, sim_time_ms)
@@ -385,6 +400,38 @@ class CAVCore:
                 confirmed_snapshots.append(snap)
             else:
                 unconfirmed_snapshots.append(snap)
+
+            # Distance-based safety fallback for confirmed tracks in our lane
+            if confirmed:
+                dx = track.x_m - ego_x_m
+                dy = track.y_m - ego_y_m
+                d_long = dx * hx + dy * hy
+                d_lat = abs(-dx * hy + dy * hx)
+                if d_long > 0.0 and d_lat <= self.brake_warning_lateral_m:
+                    # Find confidence thresholds from the configured ttc_ladder
+                    conf_hard = 0.8
+                    conf_soft = 0.6
+                    conf_decel = 0.4
+                    for act, _, min_c in self.ttc_ladder:
+                        if act == Action.HARD_BRAKE:
+                            conf_hard = min_c
+                        elif act == Action.SOFT_BRAKE:
+                            conf_soft = min_c
+                        elif act == Action.DECELERATE:
+                            conf_decel = min_c
+
+                    dist_action = Action.NONE
+                    if d_long <= 4.0 and current_conf >= conf_hard:
+                        dist_action = Action.HARD_BRAKE
+                    elif d_long <= 6.5 and current_conf >= conf_soft:
+                        dist_action = Action.SOFT_BRAKE
+                    elif d_long <= 9.0 and current_conf >= conf_decel:
+                        dist_action = Action.DECELERATE
+
+                    if _ACTION_SEVERITY[dist_action] > _ACTION_SEVERITY[final_action]:
+                        final_action = dist_action
+                        triggering_track_id = track.track_id
+                        triggering_ttc = 0.0 if dist_action == Action.HARD_BRAKE else 1.5 if dist_action == Action.SOFT_BRAKE else 3.0
 
             ttc = _compute_ttc(
                 ego_x_m, ego_y_m, ego_vx_ms, ego_vy_ms,
@@ -414,7 +461,7 @@ class CAVCore:
         # which exists to filter *uncertain perceived* objects, not a
         # peer's explicit announcement of its own state.
         coop_action = self._cooperative_brake_action(
-            ego_x_m, ego_y_m, ego_vx_ms, ego_vy_ms, sim_time_ms
+            ego_x_m, ego_y_m, ego_vx_ms, ego_vy_ms, sim_time_ms, ego_yaw_deg=ego_yaw_deg
         )
         cooperative_brake = coop_action is not Action.NONE
         if cooperative_brake and (
@@ -508,6 +555,7 @@ class CAVCore:
         ego_x_m: float, ego_y_m: float,
         ego_vx_ms: float, ego_vy_ms: float,
         sim_time_ms: float,
+        ego_yaw_deg: Optional[float] = None,
     ) -> Action:
         """Return the action imposed by any actionable V2V brake warning.
 
@@ -519,7 +567,7 @@ class CAVCore:
         # Drop expired warnings first.
         self._brake_warnings = [
             w for w in self._brake_warnings
-            if sim_time_ms - w[4] <= self.brake_warning_ttl_ms
+            if sim_time_ms - w[5] <= self.brake_warning_ttl_ms
         ]
         if not self._brake_warnings:
             return Action.NONE
@@ -528,17 +576,37 @@ class CAVCore:
         # A stopped ego has no rear-end risk to pre-empt; ignore warnings.
         if ego_speed < 0.5:
             return Action.NONE
-        hx = ego_vx_ms / ego_speed
-        hy = ego_vy_ms / ego_speed
+
+        if ego_yaw_deg is not None:
+            ego_yaw_rad = math.radians(ego_yaw_deg)
+            hx = math.cos(ego_yaw_rad)
+            hy = math.sin(ego_yaw_rad)
+        else:
+            hx = ego_vx_ms / ego_speed
+            hy = ego_vy_ms / ego_speed
+
         cos_half = math.cos(math.radians(self.brake_warning_cone_deg / 2.0))
 
-        for sx, sy, _svx, _svy, _t in self._brake_warnings:
+        for sx, sy, svx, svy, syaw, _t in self._brake_warnings:
             dx = sx - ego_x_m
             dy = sy - ego_y_m
             d = math.hypot(dx, dy)
             if d < 1e-6 or d > self.brake_warning_range_m:
                 continue
             if (dx * hx + dy * hy) / d >= cos_half:
+                # Same-direction check using sender yaw
+                syaw_rad = math.radians(syaw)
+                shx = math.cos(syaw_rad)
+                shy = math.sin(syaw_rad)
+                dot = hx * shx + hy * shy
+                if dot <= 0.0:
+                    continue
+
+                # Same-lane check using lateral offset
+                d_lat = abs(-dx * hy + dy * hx)
+                if d_lat > self.brake_warning_lateral_m:
+                    continue
+
                 return self.brake_warning_action
         return Action.NONE
 

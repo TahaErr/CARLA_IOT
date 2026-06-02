@@ -219,6 +219,7 @@ class CarlaCAV:
         # CPM period without re-polling the (possibly dead) CARLA actor.
         self._last_ego_xy: Optional[tuple[float, float]] = None
         self._last_ego_vel: tuple[float, float] = (0.0, 0.0)
+        self._last_ego_yaw: float = 0.0
         self._last_local_dets: list[LocalDetection] = []
 
     # --- lifecycle / liveness -----------------------------------------
@@ -293,6 +294,7 @@ class CarlaCAV:
                 ego_yaw, ego_vx, ego_vy = ego_t.rotation.yaw, ego_v.x, ego_v.y
             self._last_ego_xy = (ego_x, ego_y)
             self._last_ego_vel = (ego_vx, ego_vy)
+            self._last_ego_yaw = ego_yaw
 
             # === 2. Local sensor (optional) ========================
             if self.local_sensor_enabled and other_actors:
@@ -334,6 +336,7 @@ class CarlaCAV:
                 ego_vx_ms=ego_vx,
                 ego_vy_ms=ego_vy,
                 sim_time_ms=sim_time_ms,
+                ego_yaw_deg=ego_yaw,
             )
         except RuntimeError as e:
             if "destroyed actor" in str(e):
@@ -366,7 +369,7 @@ class CarlaCAV:
             )
         if msg.hard_brake:
             self._core.ingest_brake_warning(
-                msg.x_m, msg.y_m, msg.vx_ms, msg.vy_ms, sim_time_ms,
+                msg.x_m, msg.y_m, msg.vx_ms, msg.vy_ms, msg.yaw_deg, sim_time_ms,
             )
 
     def build_v2v_message(
@@ -390,6 +393,7 @@ class CarlaCAV:
             sender_id=self.id,
             x_m=ego_x, y_m=ego_y,
             vx_ms=vx, vy_ms=vy,
+            yaw_deg=self._last_ego_yaw,
             gen_time_ms=int(sim_time_ms),
             hard_brake=hard_brake,
             objects=tuple(objects),

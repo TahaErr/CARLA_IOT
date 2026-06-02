@@ -60,6 +60,7 @@ from v2xsim.hdv import (
     AI_REALISTIC,
     ATTENTIVE,
     HOSTILE_MIX,
+    DEFAULT_MIX,
     apply_mix_to_vehicles,
     apply_profile_to_tm,
     disable_collision_detection_for,
@@ -326,24 +327,25 @@ def run_single(args, penetration: float, seed: int) -> dict:
             world.tick()
 
             # === RSUs ==================================================
-            for target in target_intersections:
-                rsu = CarlaRSU(
-                    world=world,
-                    intersection=target,
-                    light_idx=0,
-                    broker=broker,
-                    detector_path=args.detector,
-                    station_id=target.id,
-                    compute_budget=budget,
-                    image_size=(args.image_w, args.image_h),
-                    fov_deg=args.fov,
-                    confidence_threshold=args.conf,
-                    device=args.device,
-                    sensor_tick_s=args.cpm_period_ms / 1000.0,
-                )
-                rsus.append(rsu)
-                light_loc = target.lights[0].get_location()
-                rsu_positions.append((light_loc.x, light_loc.y))
+            if not getattr(args, 'no_v2x', False):
+                for target in target_intersections:
+                    rsu = CarlaRSU(
+                        world=world,
+                        intersection=target,
+                        light_idx=0,
+                        broker=broker,
+                        detector_path=args.detector,
+                        station_id=target.id,
+                        compute_budget=budget,
+                        image_size=(args.image_w, args.image_h),
+                        fov_deg=args.fov,
+                        confidence_threshold=args.conf,
+                        device=args.device,
+                        sensor_tick_s=args.cpm_period_ms / 1000.0,
+                    )
+                    rsus.append(rsu)
+                    light_loc = target.lights[0].get_location()
+                    rsu_positions.append((light_loc.x, light_loc.y))
 
             # === Vehicles ==============================================
             vehicles = _spawn_vehicles(world, tm, args.n_vehicles, rng)
@@ -366,8 +368,9 @@ def run_single(args, penetration: float, seed: int) -> dict:
             hdv_vehicles = [v for v in vehicles if v.id not in cav_actor_ids]
 
             # HDV behaviour mix (TM avoidance disabled later, after warmup).
+            hdv_mix_obj = HOSTILE_MIX if getattr(args, 'hdv_mix', 'hostile') == "hostile" else DEFAULT_MIX
             hdv_assignments = apply_mix_to_vehicles(
-                tm, hdv_vehicles, mix=HOSTILE_MIX, rng=np_rng,
+                tm, hdv_vehicles, mix=hdv_mix_obj, rng=np_rng,
             )
             # CAV driving profile — careful AI by default.
             cav_profile = ATTENTIVE if args.cav_attentive else AI_REALISTIC
@@ -501,7 +504,7 @@ def run_single(args, penetration: float, seed: int) -> dict:
             # profile violations produce measurable collisions. CAVs are
             # NOT in the actor list, so they keep avoidance and behave as
             # careful AVs (Sprint 5 item 4).
-            disable_collision_detection_for(tm, hdv_vehicles, vehicles)
+            # disable_collision_detection_for(tm, hdv_vehicles, vehicles)
             world.tick()
 
             # === Main loop =============================================
@@ -1001,6 +1004,8 @@ def main() -> int:
                    help="Disable the CAV→CAV V2V leg (V2I-only arm). CAVs keep "
                         "RSU CPMs + their local sensor. Use to isolate V2V's "
                         "marginal benefit vs RSU-only cooperative perception.")
+    p.add_argument("--no-v2x", action="store_true",
+                   help="Disable RSU/V2I CPM broadcasts completely (V2V-only arm).")
     p.add_argument("--image-w", type=int, default=1280)
     p.add_argument("--image-h", type=int, default=720)
     p.add_argument("--fov", type=float, default=90.0)
@@ -1012,6 +1017,8 @@ def main() -> int:
                         "RSU/YOLO, actor build, CAV decide, V2V, collisions) and "
                         "print a breakdown at the end. Diagnostic for where wall "
                         "time goes.")
+    p.add_argument("--hdv-mix", choices=["hostile", "default"], default="hostile",
+                   help="HDV behaviour mix. 'hostile' = HOSTILE_MIX, 'default' = DEFAULT_MIX.")
     p.add_argument("--cav-attentive", action="store_true",
                    help="Ablation arm: give CAVs the flawless ATTENTIVE profile "
                         "instead of the default careful AI_REALISTIC (small "

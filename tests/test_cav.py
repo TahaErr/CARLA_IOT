@@ -417,3 +417,56 @@ def test_register_station_alias_feeds_ingest_cpm():
     c.register_station("cav_99", (0.0, 0.0))
     c.ingest_cpm(_cpm([_obj(x=10.0, y=0.0)], station_id=99), "cav_99", 0.0, 0.0)
     assert len(c.get_tracks()) == 1
+
+
+def test_brake_warning_same_direction_and_lateral_offset():
+    """Verify that V2V brake warnings are filtered by heading direction and lateral offset."""
+    # Setup ego at (0, 0) moving +x (ego_vx=10, ego_vy=0)
+    # 1. Opposite direction (yaw = 180): ignored
+    c = _core()
+    c.ingest_brake_warning(20.0, 0.0, -10.0, 0.0, sender_yaw_deg=180.0, sim_time_ms=0.0)
+    d = c.update(0, 0, 10.0, 0.0, sim_time_ms=0.0)
+    assert d.action == Action.NONE
+
+    # 2. Large lateral offset (y = 5.0): ignored
+    c = _core()
+    c.ingest_brake_warning(20.0, 5.0, 10.0, 0.0, sender_yaw_deg=0.0, sim_time_ms=0.0)
+    d = c.update(0, 0, 10.0, 0.0, sim_time_ms=0.0)
+    assert d.action == Action.NONE
+
+    # 3. Same direction, same lane (y = 0.5): accepted
+    c = _core()
+    c.ingest_brake_warning(20.0, 0.5, 10.0, 0.0, sender_yaw_deg=0.0, sim_time_ms=0.0)
+    d = c.update(0, 0, 10.0, 0.0, sim_time_ms=0.0)
+    assert d.action == Action.SOFT_BRAKE
+
+
+def test_distance_based_safety_fallback():
+    """Verify that confirmed tracks close in front of us trigger distance fallback actions."""
+    # Setup ego at (0, 0) moving +x (ego_vx=1.0, ego_vy=0)
+    # A confirmed track at x = 3.0 m (<= 4.0 m) should trigger HARD_BRAKE, even if TTC calculation
+    # is large/non-actionable because speed is low.
+    c = _core()
+    # Confirm track first
+    c.ingest_cpm(_cpm([_obj(x=3.0, y=0.0, conf=0.9)]), "A", 0.0, 0.0)
+    c.ingest_cpm(_cpm([_obj(x=3.0, y=0.0, conf=0.9)]), "A", 50.0, 50.0)
+    
+    # Ego speed = 1.0 m/s. TTC = 3.0 / 1.0 = 3.0 s (TTC ladder would only trigger DECELERATE).
+    # Distance-based fallback triggers HARD_BRAKE because distance is 3.0 m <= 4.0 m.
+    d = c.update(0, 0, 1.0, 0.0, sim_time_ms=50.0)
+    assert d.action == Action.HARD_BRAKE
+
+    # Confirmed track at x = 5.0 m (<= 6.5 m) triggers SOFT_BRAKE
+    c = _core()
+    c.ingest_cpm(_cpm([_obj(x=5.0, y=0.0, conf=0.9)]), "A", 0.0, 0.0)
+    c.ingest_cpm(_cpm([_obj(x=5.0, y=0.0, conf=0.9)]), "A", 50.0, 50.0)
+    d = c.update(0, 0, 1.0, 0.0, sim_time_ms=50.0)
+    assert d.action == Action.SOFT_BRAKE
+
+    # Confirmed track at x = 8.0 m (<= 9.0 m) triggers DECELERATE
+    c = _core()
+    c.ingest_cpm(_cpm([_obj(x=8.0, y=0.0, conf=0.9)]), "A", 0.0, 0.0)
+    c.ingest_cpm(_cpm([_obj(x=8.0, y=0.0, conf=0.9)]), "A", 50.0, 50.0)
+    d = c.update(0, 0, 1.0, 0.0, sim_time_ms=50.0)
+    assert d.action == Action.DECELERATE
+

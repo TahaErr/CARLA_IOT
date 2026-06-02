@@ -72,7 +72,22 @@ class Broker:
 
     # Internal state — do not mutate directly.
     _next_msg_id: int = field(default=0, init=False, repr=False)
-    _pending: list[CPMTransmission] = field(default_factory=list, init=False, repr=False)
+    _pending_by_receiver: dict[str, list[CPMTransmission]] = field(default_factory=dict, init=False, repr=False)
+
+    @property
+    def _pending(self) -> list[CPMTransmission]:
+        res = []
+        for lst in self._pending_by_receiver.values():
+            res.extend(lst)
+        return res
+
+    @_pending.setter
+    def _pending(self, val: list[CPMTransmission]) -> None:
+        self._pending_by_receiver.clear()
+        for m in val:
+            if m.receiver_id not in self._pending_by_receiver:
+                self._pending_by_receiver[m.receiver_id] = []
+            self._pending_by_receiver[m.receiver_id].append(m)
     # (sim_time_ms, tx_duration_ms) for each successful publish() call.
     _tx_history: list[tuple[float, float]] = field(default_factory=list, init=False, repr=False)
 
@@ -117,7 +132,9 @@ class Broker:
                 payload_bytes=payload_bytes,
             )
             self._next_msg_id += 1
-            self._pending.append(msg)
+            if receiver_id not in self._pending_by_receiver:
+                self._pending_by_receiver[receiver_id] = []
+            self._pending_by_receiver[receiver_id].append(msg)
             accepted.append(msg)
 
         return accepted
@@ -140,15 +157,24 @@ class Broker:
         deterministic replay across runs with the same seed.
         """
         due: list[CPMTransmission] = []
-        keep: list[CPMTransmission] = []
-        for m in self._pending:
-            if m.sim_time_deliver_ms <= sim_time_ms and (
-                receiver_id is None or m.receiver_id == receiver_id
-            ):
-                due.append(m)
-            else:
-                keep.append(m)
-        self._pending = keep
+        if receiver_id is not None:
+            pending = self._pending_by_receiver.get(receiver_id, [])
+            keep = []
+            for m in pending:
+                if m.sim_time_deliver_ms <= sim_time_ms:
+                    due.append(m)
+                else:
+                    keep.append(m)
+            self._pending_by_receiver[receiver_id] = keep
+        else:
+            for r_id, pending in list(self._pending_by_receiver.items()):
+                keep = []
+                for m in pending:
+                    if m.sim_time_deliver_ms <= sim_time_ms:
+                        due.append(m)
+                    else:
+                        keep.append(m)
+                self._pending_by_receiver[r_id] = keep
         due.sort(key=lambda m: (m.sim_time_deliver_ms, m.sender_id, m.msg_id))
         return due
 
@@ -183,4 +209,4 @@ class Broker:
 
     def pending_count(self) -> int:
         """Number of in-flight (scheduled but undelivered) transmissions."""
-        return len(self._pending)
+        return sum(len(lst) for lst in self._pending_by_receiver.values())

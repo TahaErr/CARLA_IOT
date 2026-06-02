@@ -13,7 +13,7 @@ from typing import Iterator, Tuple
 import carla
 
 
-def connect(host: str = "127.0.0.1", port: int = 2000, timeout: float = 20.0) -> carla.Client:
+def connect(host: str = "127.0.0.1", port: int = 2000, timeout: float = 120.0) -> carla.Client:
     """Open a CARLA client. Timeout is generous because the first connection
     on a freshly-started server can take several seconds while assets warm up."""
     client = carla.Client(host, port)

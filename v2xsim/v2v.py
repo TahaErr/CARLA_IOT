@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 from .cpm import CPMObject
 
@@ -60,6 +61,7 @@ class V2VMessage:
     vx_ms: float
     vy_ms: float
     gen_time_ms: int
+    yaw_deg: float = 0.0
     hard_brake: bool = False
     objects: tuple[CPMObject, ...] = field(default_factory=tuple)
 
@@ -82,6 +84,7 @@ def encode_v2v(msg: V2VMessage) -> bytes:
         "y": msg.y_m,
         "vx": msg.vx_ms,
         "vy": msg.vy_ms,
+        "yaw": msg.yaw_deg,
         "t": int(msg.gen_time_ms),
         "hb": 1 if msg.hard_brake else 0,
         # [object_id, class, x, y, vx, vy, confidence]
@@ -93,6 +96,7 @@ def encode_v2v(msg: V2VMessage) -> bytes:
     return V2V_MAGIC + json.dumps(body, separators=(",", ":")).encode("utf-8")
 
 
+@lru_cache(maxsize=1024)
 def decode_v2v(data: bytes) -> V2VMessage:
     """Inverse of `encode_v2v`. Raises ValueError if the magic is missing."""
     if not is_v2v(data):
@@ -116,6 +120,7 @@ def decode_v2v(data: bytes) -> V2VMessage:
         y_m=float(body["y"]),
         vx_ms=float(body["vx"]),
         vy_ms=float(body["vy"]),
+        yaw_deg=float(body.get("yaw", 0.0)),
         gen_time_ms=int(body["t"]),
         hard_brake=bool(body.get("hb", 0)),
         objects=objects,

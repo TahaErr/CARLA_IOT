@@ -459,6 +459,7 @@ def encode_cpm(cpm: CPM) -> bytes:
     return data
 
 
+@lru_cache(maxsize=1024)
 def decode_cpm(data: bytes) -> CPM:
     """Parse ASN.1 UPER bytes back into a CPM dataclass."""
     d = _compiler().decode(_PDU_TYPE, data)
