@@ -472,16 +472,26 @@ def test_distance_based_safety_fallback():
 
 
 def test_ego_self_exclusion():
-    """Verify that tracks closer than 3.0 m to the ego vehicle center are ignored (self-exclusion)."""
+    """A co-located AND co-moving track is the ego's own RSU ghost reflection
+    and must be ignored. The ego moves +x at 5 m/s; the ghost sits 1 m ahead
+    moving at the same 5 m/s (zero relative velocity)."""
     c = _core()
-    # Confirm track that is extremely close to the ego vehicle center (e.g. x = 1.0 m)
-    c.ingest_cpm(_cpm([_obj(x=1.0, y=0.0, conf=0.9)]), "A", 0.0, 0.0)
-    c.ingest_cpm(_cpm([_obj(x=1.0, y=0.0, conf=0.9)]), "A", 50.0, 50.0)
-    
-    # Ego at (0, 0). The track is at x = 1.0 m, which is in front and within same lane.
-    # It would normally trigger HARD_BRAKE via distance fallback (1.0 m <= 4.0 m).
-    # But self-exclusion skips it entirely.
-    d = c.update(0, 0, 1.0, 0.0, sim_time_ms=50.0)
+    c.ingest_cpm(_cpm([_obj(x=1.0, y=0.0, vx=5.0, conf=0.9)]), "A", 0.0, 0.0)
+    c.ingest_cpm(_cpm([_obj(x=1.0, y=0.0, vx=5.0, conf=0.9)]), "A", 50.0, 50.0)
+    d = c.update(0, 0, 5.0, 0.0, sim_time_ms=50.0)
     assert d.action == Action.NONE
+
+
+def test_self_exclusion_does_not_blind_close_wreck():
+    """Regression for the Config-G inversion: a STATIONARY wreck 2 m ahead of a
+    moving ego is NOT a self-ghost (large relative velocity) and must still
+    trigger emergency braking. The old position-only 3 m gate wrongly blanked
+    this out, so CAVs rolled into frozen wrecks."""
+    c = _core()
+    # Stationary track (vx=0) at x = 2.0 m, ego approaching at 8 m/s.
+    c.ingest_cpm(_cpm([_obj(x=2.0, y=0.0, vx=0.0, conf=0.9)]), "A", 0.0, 0.0)
+    c.ingest_cpm(_cpm([_obj(x=2.0, y=0.0, vx=0.0, conf=0.9)]), "A", 50.0, 50.0)
+    d = c.update(0, 0, 8.0, 0.0, sim_time_ms=50.0)
+    assert d.action == Action.HARD_BRAKE
 
 

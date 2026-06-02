@@ -111,6 +111,12 @@ def main() -> int:
     p.add_argument("--restart-after-fails", type=int, default=3,
                    help="Consecutive cell failures before the watchdog checks/"
                         "restarts the CARLA server (default 3).")
+    p.add_argument("--cell-retries", type=int, default=2,
+                   help="Extra attempts per cell on failure (default 2 = up to "
+                        "3 tries). Transient CARLA map-load/spawn crashes leave a "
+                        "0-byte log and no JSON; a retry recovers them so a sweep "
+                        "finishes with no gaps. Between attempts the server health "
+                        "is checked (and restarted if --carla-exe was given).")
     p.add_argument("--python", default=sys.executable,
                    help="Python interpreter to use for subprocesses")
     p.add_argument("--runner", default="scripts/40_ablation_run.py",
@@ -269,31 +275,44 @@ def main() -> int:
         if args.no_v2x:
             cmd.append("--no-v2x")
         cmd.extend(["--hdv-mix", args.hdv_mix])
-        cell_t0 = time.time()
         cell_ok = False
-        try:
-            with open(log_path, "w", encoding="utf-8") as log_f:
-                result = subprocess.run(
-                    cmd,
-                    stdout=log_f, stderr=subprocess.STDOUT,
-                    timeout=cell_timeout,
-                )
-            cell_wall = time.time() - cell_t0
-            if result.returncode == 0 and os.path.exists(out_path):
-                print(f"   ok   ({cell_wall:.0f}s wall)  log: {log_path}")
-                cell_ok = True
+        attempts = max(1, args.cell_retries + 1)
+        for attempt in range(1, attempts + 1):
+            cell_t0 = time.time()
+            try:
+                with open(log_path, "w", encoding="utf-8") as log_f:
+                    result = subprocess.run(
+                        cmd,
+                        stdout=log_f, stderr=subprocess.STDOUT,
+                        timeout=cell_timeout,
+                    )
+                cell_wall = time.time() - cell_t0
+                if result.returncode == 0 and os.path.exists(out_path):
+                    tag = "ok  " if attempt == 1 else f"ok (retry {attempt-1})"
+                    print(f"   {tag} ({cell_wall:.0f}s wall)  log: {log_path}")
+                    cell_ok = True
+                    break
+                reason = f"rc={result.returncode}, json={'yes' if os.path.exists(out_path) else 'no'}"
+            except subprocess.TimeoutExpired:
+                cell_wall = time.time() - cell_t0
+                reason = "TIMEOUT"
+            except Exception as e:
+                cell_wall = time.time() - cell_t0
+                reason = f"ERROR: {e}"
+
+            if attempt < attempts:
+                print(f"   FAIL attempt {attempt}/{attempts} ({cell_wall:.0f}s wall, "
+                      f"{reason}) — retrying  log: {log_path}", file=sys.stderr)
+                # A failed attempt often means the server hiccuped on the map
+                # load/spawn. Check the port (restart if --carla-exe) before retry.
+                if not _carla_up():
+                    _try_restart_carla()
+                else:
+                    time.sleep(3.0)  # brief settle; lets stale streams drain
             else:
                 crashed += 1
-                print(f"   FAIL ({cell_wall:.0f}s wall, rc={result.returncode})  "
-                      f"log: {log_path}", file=sys.stderr)
-        except subprocess.TimeoutExpired:
-            crashed += 1
-            cell_wall = time.time() - cell_t0
-            print(f"   TIMEOUT ({cell_wall:.0f}s wall)  log: {log_path}",
-                  file=sys.stderr)
-        except Exception as e:
-            crashed += 1
-            print(f"   ERROR: {e}", file=sys.stderr)
+                print(f"   FAIL ({cell_wall:.0f}s wall, {reason}) after {attempts} "
+                      f"attempts  log: {log_path}", file=sys.stderr)
 
         # Watchdog: a run of consecutive failures usually means the CARLA
         # server died. Check the port and relaunch if --carla-exe was given.

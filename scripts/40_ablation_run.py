@@ -537,6 +537,12 @@ def run_single(args, penetration: float, seed: int) -> dict:
             # the old contact-frame count).
             seen_collision_pairs: set = set()
             collision_incidents: list = []  # (sim_t, a_id, b_id) — one per pair
+            # A "secondary" incident is a new pair where one party was ALREADY
+            # immobilised by an earlier crash — i.e. traffic piling into a
+            # stationary wreck rather than a fresh driving failure. Tracking it
+            # separately stops the immobilise-in-place policy from inflating the
+            # headline safety metric (one wreck bumped by N cars = N pairs).
+            secondary_collision_count = 0
             frozen_ids: set = set()
             processed_collision_idx = 0
 
@@ -690,6 +696,10 @@ def run_single(args, penetration: float, seed: int) -> dict:
                         continue
                     seen_collision_pairs.add(key)
                     collision_incidents.append((sim_t, a_id, b_id))
+                    # Secondary if either party was already wrecked before this
+                    # contact (pileup into a stationary wreck, not a new failure).
+                    if a_id in frozen_ids or b_id in frozen_ids:
+                        secondary_collision_count += 1
                     # Immobilise any vehicle parties (walkers are left alone).
                     for pid in (a_id, b_id):
                         if pid in frozen_ids:
@@ -802,6 +812,8 @@ def run_single(args, penetration: float, seed: int) -> dict:
                 "cbr_mean": cbr_mean,
                 "cbr_max": cbr_max,
                 "collision_count": len(deduped_events),
+                "primary_collision_count": len(deduped_events) - secondary_collision_count,
+                "secondary_collision_count": secondary_collision_count,
                 "raw_collision_events": len(collision_events),
                 "cav_collision_count": cav_collisions,
                 "hdv_collision_count": hdv_collisions,

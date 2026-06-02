@@ -52,6 +52,9 @@ def _flatten_cell(metrics: dict) -> dict:
         "wall_seconds":          metrics.get("wall_seconds"),
         "wall_to_sim_ratio":     metrics.get("wall_to_sim_ratio"),
         "collision_count":       metrics.get("collision_count", 0),
+        "primary_collision_count":   metrics.get("primary_collision_count",
+                                                 metrics.get("collision_count", 0)),
+        "secondary_collision_count": metrics.get("secondary_collision_count", 0),
         "raw_collision_events":  metrics.get("raw_collision_events", 0),
         "cav_collision_count":   metrics.get("cav_collision_count", 0),
         "hdv_collision_count":   metrics.get("hdv_collision_count", 0),
@@ -113,7 +116,8 @@ def _aggregate_by_cell(rows: list[dict]) -> list[dict]:
 
     out = []
     metric_keys = [
-        "collision_count", "cav_collision_count", "hdv_collision_count",
+        "collision_count", "primary_collision_count", "secondary_collision_count",
+        "cav_collision_count", "hdv_collision_count",
         "vru_collision_count", "cav_hit_pedestrian_count",
         "hdv_hit_pedestrian_count",
         "action_hard_brake", "action_soft_brake", "action_decelerate",

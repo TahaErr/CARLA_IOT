@@ -393,11 +393,21 @@ class CAVCore:
             hx, hy = 1.0, 0.0
 
         for track in self._tracks.values():
-            # Ego self-exclusion: ignore tracks representing the CAV itself (RSU ghost reflections)
+            # Ego self-exclusion: the RSU detects the CAV's own body and
+            # rebroadcasts it as a track sitting on top of the ego. A genuine
+            # *self-ghost* is co-located AND co-moving with the ego. A real
+            # hazard at close range (e.g. a stopped wreck the ego is rolling
+            # toward, or a car cutting in) has a large RELATIVE velocity, so a
+            # position-only gate would wrongly blind the CAV to exactly the
+            # threats that matter most. Require BOTH a tight position match and
+            # a velocity match before discarding the track as our own ghost.
             dx_ego = track.x_m - ego_x_m
             dy_ego = track.y_m - ego_y_m
-            if math.hypot(dx_ego, dy_ego) < 3.0:
-                continue
+            if math.hypot(dx_ego, dy_ego) < 2.5:
+                dvx_ego = track.vx_ms - ego_vx_ms
+                dvy_ego = track.vy_ms - ego_vy_ms
+                if math.hypot(dvx_ego, dvy_ego) < 1.5:
+                    continue
 
             current_conf = self._current_confidence(track, sim_time_ms)
             confirmed = self._is_confirmed(track, sim_time_ms)
