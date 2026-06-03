@@ -1,0 +1,4 @@
+FAIL — run crashed: rpc::rpc_error during call in function random_left_lanechange_percentage
+=== Single run: penetration=1.0 seed=0
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town05.bin 
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town05.bin 

@@ -1,0 +1,17 @@
+=== Single run: penetration=0.5 seed=1
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town01.bin 
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town01.bin 
+INFO:  Found the required file in cache!  Carla/Maps/TM/Town01.bin 
+ERROR: failed to destroy actor 49116 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 49135 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 49137 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 49148 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 49072 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 49091 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 49093 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 49104 : unable to destroy actor: not found 
+wrote out\ablation_full\p050_w060_ClearNoon_Town01_s01.json
+  collisions:                1463 (cav=531 hdv=932)
+  VRU collisions:            2 (cav-hit=0 hdv-hit=2)
+  phantom brakes suppressed: 20
+  actions taken:             {'none': 66490, 'decelerate': 2114, 'soft_brake': 2295, 'hard_brake': 1101}

@@ -1,0 +1,10 @@
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town10HD_Opt.bin 
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town10HD_Opt.bin 
+INFO:  Found the required file in cache!  Carla/Maps/TM/Town10HD_Opt.bin 
+ERROR: failed to destroy actor 11786 : unable to destroy actor: not found 
+=== Single run: penetration=0.5 seed=0
+wrote out/ablation_smoke_test_hostile_40pct\p050_w060_Town10HD_Opt_s00.json
+  collisions:                7 (cav=4 hdv=3)
+  VRU collisions:            0 (cav-hit=0 hdv-hit=0)
+  phantom brakes suppressed: 23
+  actions taken:             {'none': 5488, 'decelerate': 391, 'soft_brake': 522, 'hard_brake': 9706}

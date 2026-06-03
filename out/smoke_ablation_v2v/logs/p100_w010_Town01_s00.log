@@ -1,0 +1,8 @@
+=== Single run: penetration=1.0 seed=0
+wrote out/smoke_ablation_v2v\p100_w010_Town01_s00.json
+  collisions:                4 (cav=4 hdv=0)
+  VRU collisions:            0 (cav-hit=0 hdv-hit=0)
+  phantom brakes suppressed: 18
+  actions taken:             {'none': 1229, 'decelerate': 41, 'soft_brake': 375, 'hard_brake': 726}
+INFO:  Found the required file in cache!  Carla/Maps/TM/Town01.bin 
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town01.bin 

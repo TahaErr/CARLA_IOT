@@ -1,0 +1,8 @@
+=== Single run: penetration=1.0 seed=2
+wrote out\ablation\p100_w00_s02.json
+  collisions:                1301 (cav=1301 hdv=0)
+  phantom brakes suppressed: 48
+  actions taken:             {'none': 134605, 'decelerate': 1880, 'soft_brake': 1949, 'hard_brake': 5566}
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town05.bin 
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town05.bin 
+INFO:  Found the required file in cache!  Carla/Maps/TM/Town05.bin 

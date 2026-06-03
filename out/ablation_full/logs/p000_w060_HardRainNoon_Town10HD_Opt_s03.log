@@ -1,0 +1,32 @@
+=== Single run: penetration=0.0 seed=3
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town10HD_Opt.bin 
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town10HD_Opt.bin 
+INFO:  Found the required file in cache!  Carla/Maps/TM/Town10HD_Opt.bin 
+ERROR: failed to destroy actor 42346 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 42348 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 42349 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 42352 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 42354 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 42357 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 42361 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 42367 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 42372 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 42375 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 42382 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 42394 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 42287 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 42289 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 42290 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 42293 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 42298 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 42302 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 42308 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 42313 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 42316 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 42323 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 42335 : unable to destroy actor: not found 
+wrote out\ablation_full\p000_w060_HardRainNoon_Town10HD_Opt_s03.json
+  collisions:                1355 (cav=0 hdv=1355)
+  VRU collisions:            2 (cav-hit=0 hdv-hit=2)
+  phantom brakes suppressed: 0
+  actions taken:             {'none': 0, 'decelerate': 0, 'soft_brake': 0, 'hard_brake': 0}

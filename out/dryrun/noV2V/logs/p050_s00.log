@@ -1,0 +1,8 @@
+=== Single run: penetration=0.5 seed=0
+wrote out/dryrun/noV2V\p050_s00.json
+  collisions:                6 (cav=1 hdv=5)
+  phantom brakes suppressed: 5
+  actions taken:             {'none': 8517, 'decelerate': 100, 'soft_brake': 113, 'hard_brake': 0}
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town05.bin 
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town05.bin 
+INFO:  Found the required file in cache!  Carla/Maps/TM/Town05.bin 

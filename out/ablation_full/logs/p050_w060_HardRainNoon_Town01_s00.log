@@ -1,0 +1,19 @@
+=== Single run: penetration=0.5 seed=0
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town01.bin 
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town01.bin 
+INFO:  Found the required file in cache!  Carla/Maps/TM/Town01.bin 
+ERROR: failed to destroy actor 61343 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 61347 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 61351 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 61352 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 61355 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 61298 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 61302 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 61306 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 61307 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 61310 : unable to destroy actor: not found 
+wrote out\ablation_full\p050_w060_HardRainNoon_Town01_s00.json
+  collisions:                1396 (cav=849 hdv=547)
+  VRU collisions:            2 (cav-hit=2 hdv-hit=0)
+  phantom brakes suppressed: 30
+  actions taken:             {'none': 65597, 'decelerate': 2704, 'soft_brake': 2338, 'hard_brake': 1361}
