@@ -9,9 +9,9 @@ It applies four edits:
   E2  Determinism: seed the Traffic Manager AND the pedestrian-nav RNG
       from the cell seed (fixes the p=0 arms diverging — "Symptom A").
   E3  Restore the HDV avoidance-disable, but PROFILE-SELECTIVE: avoidance
-      is removed only from the genuinely dangerous profile(s); ATTENTIVE
-      (and DISTRACTED) keep it and drive safely (fixes "Symptom B" + the
-      realism problem you described).
+      is removed from DISTRACTED + AGGRESSIVE_HOSTILE; ONLY ATTENTIVE keeps
+      it and drives safely (fixes "Symptom B" + the realism problem). The
+      distracted-vs-aggressive gradient is preserved by their ignore rates.
   E4  Fix the stale role-print that still claimed "avoidance OFF" for all HDVs.
 
 IMPORTANT — I am working from project-knowledge fragments, not your
@@ -95,14 +95,15 @@ PATCH_40_EDITS = [
         "RECKLESS_PROFILE_NAMES",  # idempotency marker
         "            # disable_collision_detection_for(tm, hdv_vehicles, vehicles)\n"
         "            world.tick()",
-        "            # Remove TM avoidance (one-way) ONLY from genuinely\n"
-        "            # dangerous driver profiles, so their ignore-vehicle\n"
-        "            # behaviour produces real conflicts. ATTENTIVE (and\n"
-        "            # DISTRACTED) HDVs KEEP avoidance and drive safely —\n"
-        "            # disabling it for EVERY HDV made even attentive drivers\n"
-        "            # crash, which was unrealistic. Directional: reckless HDVs\n"
-        "            # don't avoid others; careful HDVs + CAVs still avoid them.\n"
-        "            RECKLESS_PROFILE_NAMES = {AGGRESSIVE_HOSTILE.name}  # add DISTRACTED.name to raise baseline\n"
+        "            # Remove TM avoidance (one-way) from the imperfect driver\n"
+        "            # profiles. ONLY ATTENTIVE keeps avoidance and drives\n"
+        "            # safely: disabling it for EVERY HDV made even attentive\n"
+        "            # drivers crash (unrealistic), but keeping it ON for\n"
+        "            # DISTRACTED made distracted == attentive (also wrong).\n"
+        "            # With avoidance off, each profile's own ignore rate sets\n"
+        "            # the gradient: distracted (20%) < aggressive-hostile (40%).\n"
+        "            # Directional: reckless HDVs don't avoid; ATTENTIVE + CAVs do.\n"
+        "            RECKLESS_PROFILE_NAMES = {AGGRESSIVE_HOSTILE.name, DISTRACTED.name}  # only ATTENTIVE keeps avoidance\n"
         "            reckless_hdvs = [\n"
         "                v for v in hdv_vehicles\n"
         "                if hdv_assignments.get(v.id) in RECKLESS_PROFILE_NAMES\n"

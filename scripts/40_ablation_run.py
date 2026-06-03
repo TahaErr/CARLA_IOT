@@ -5,8 +5,11 @@ Town05 with 3 fixed RSUs (intersections 0/3/7), 60 vehicles, 5-min sim
 per cell.
 
 Sprint 5 behaviour model (role-based):
-  - HDVs (human-driven): HOSTILE_MIX (50/20/30) with TM collision
-    avoidance DISABLED — the conflict generators.
+  - HDVs (human-driven): HOSTILE_MIX (50/20/30). TM collision avoidance is
+    disabled for the imperfect profiles (distracted + aggressive_hostile) so
+    each profile's own ignore rate sets the conflict gradient; ONLY attentive
+    HDVs keep avoidance and drive safely. The reckless HDVs generate the
+    conflicts.
   - CAVs (V2X fleet): careful AI_REALISTIC profile, TM avoidance ENABLED,
     plus cooperative perception (RSU CPM) AND V2V (CAV→CAV shared objects +
     hard-brake intent).
@@ -57,8 +60,10 @@ from v2xsim.carla_utils import connect, ensure_map, synchronous_mode
 from v2xsim.cav import Action
 from v2xsim.compute_budget import unconstrained_profile
 from v2xsim.hdv import (
+    AGGRESSIVE_HOSTILE,
     AI_REALISTIC,
     ATTENTIVE,
+    DISTRACTED,
     HOSTILE_MIX,
     DEFAULT_MIX,
     apply_mix_to_vehicles,
@@ -317,6 +322,18 @@ def run_single(args, penetration: float, seed: int) -> dict:
 
     try:
         with synchronous_mode(client, dt=args.dt) as (world, tm):
+            # Determinism: seed the Traffic Manager and the
+            # pedestrian-nav RNG from the cell seed, so re-runs and
+            # the three arms at p=0 are reproducible. Mirrors
+            # 15_generate_dataset.py.
+            try:
+                tm.set_random_device_seed(seed)
+            except Exception:
+                pass
+            try:
+                world.set_pedestrians_seed(seed)  # get_random_location_from_navigation()
+            except Exception:
+                pass
             world.tick()
 
             # === Weather preset =======================================
@@ -399,7 +416,7 @@ def run_single(args, penetration: float, seed: int) -> dict:
                 cavs.append(cav)
 
             if not args.quiet:
-                print(f"   roles: {len(hdv_vehicles)} HDV (HOSTILE_MIX, avoidance OFF) + "
+                print(f"   roles: {len(hdv_vehicles)} HDV (HOSTILE_MIX, avoidance per-profile) + "
                       f"{len(cav_vehicles)} CAV ({cav_profile.name}, avoidance ON, V2V)")
 
             # === Walkers (pedestrians, optional VRU axis) ============
@@ -504,7 +521,24 @@ def run_single(args, penetration: float, seed: int) -> dict:
             # profile violations produce measurable collisions. CAVs are
             # NOT in the actor list, so they keep avoidance and behave as
             # careful AVs (Sprint 5 item 4).
-            # disable_collision_detection_for(tm, hdv_vehicles, vehicles)
+            # Remove TM avoidance (one-way) from the imperfect driver
+            # profiles. ONLY ATTENTIVE keeps avoidance and drives
+            # safely: disabling it for EVERY HDV made even attentive
+            # drivers crash (unrealistic), but keeping it ON for
+            # DISTRACTED made distracted == attentive (also wrong).
+            # With avoidance off, each profile's own ignore rate sets
+            # the gradient: distracted (20%) < aggressive-hostile (40%).
+            # Directional: reckless HDVs don't avoid; ATTENTIVE + CAVs do.
+            RECKLESS_PROFILE_NAMES = {AGGRESSIVE_HOSTILE.name, DISTRACTED.name}  # only ATTENTIVE keeps avoidance
+            reckless_hdvs = [
+                v for v in hdv_vehicles
+                if hdv_assignments.get(v.id) in RECKLESS_PROFILE_NAMES
+            ]
+            if reckless_hdvs:
+                disable_collision_detection_for(tm, reckless_hdvs, vehicles)
+            if not args.quiet:
+                print(f"   avoidance OFF for {len(reckless_hdvs)} reckless HDV(s); "
+                      f"ON for {len(hdv_vehicles) - len(reckless_hdvs)} careful HDV(s) + all CAVs")
             world.tick()
 
             # === Main loop =============================================

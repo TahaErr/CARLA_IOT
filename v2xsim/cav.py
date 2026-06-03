@@ -423,7 +423,18 @@ class CAVCore:
                 dy = track.y_m - ego_y_m
                 d_long = dx * hx + dy * hy
                 d_lat = abs(-dx * hy + dy * hx)
-                if d_long > 0.0 and d_lat <= self.brake_warning_lateral_m:
+                # Longitudinal closing speed (>0 = the gap is shrinking). A
+                # co-moving leader we are safely following has closing ~0 and
+                # must NOT trip the emergency fallback — otherwise a CAV
+                # hard-brakes on the car ahead at its own 3 m following gap,
+                # which sits inside the 4 m hard-brake band (2.5 m self-ghost
+                # filter < 3 m gap < 4 m band). Only stationary wrecks and
+                # genuinely closing hazards (ego approaching) qualify.
+                rel_vx = track.vx_ms - ego_vx_ms
+                rel_vy = track.vy_ms - ego_vy_ms
+                closing_ms = -(rel_vx * hx + rel_vy * hy)
+                if (d_long > 0.0 and d_lat <= self.brake_warning_lateral_m
+                        and closing_ms >= 0.5):
                     # Find confidence thresholds from the configured ttc_ladder
                     conf_hard = 0.8
                     conf_soft = 0.6

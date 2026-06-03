@@ -138,7 +138,11 @@ AGGRESSIVE_HOSTILE = DriverProfile(
 AI_REALISTIC = DriverProfile(
     name="ai_realistic",
     speed_difference_pct=0.0,
-    distance_to_leading_m=3.0,             # cautious — wider gap than ATTENTIVE (2.5)
+    distance_to_leading_m=7.0,             # large headway: a cautious ADS keeps a long
+                                           # stopping buffer so it never rear-ends a leader
+                                           # that brakes hard or is already stopped. Raised
+                                           # 3.0 -> 9.0 after observing CAVs sandwich/rear-end
+                                           # stopped cars at high penetration.
     ignore_lights_pct=1.0,                 # rare planning/perception slip
     ignore_signs_pct=1.0,
     ignore_vehicles_pct=0.0,               # avoidance layer (TM) handles vehicles
