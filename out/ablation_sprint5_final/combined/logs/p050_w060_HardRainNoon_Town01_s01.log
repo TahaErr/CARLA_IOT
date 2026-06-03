@@ -1,0 +1,9 @@
+=== Single run: penetration=0.5 seed=1
+wrote out/ablation_sprint5_final\combined\p050_w060_HardRainNoon_Town01_s01.json
+  collisions:                12 (cav=6 hdv=6)
+  VRU collisions:            0 (cav-hit=0 hdv-hit=0)
+  phantom brakes suppressed: 35
+  actions taken:             {'none': 42040, 'decelerate': 2507, 'soft_brake': 790, 'hard_brake': 413}
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town01.bin 
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town01.bin 
+INFO:  Found the required file in cache!  Carla/Maps/TM/Town01.bin 
