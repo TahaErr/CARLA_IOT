@@ -19,7 +19,7 @@ env/
 Thumbs.db
 
 # CARLA outputs (regenerate from scripts)
-out/
+
 *.mp4
 *.avi
 

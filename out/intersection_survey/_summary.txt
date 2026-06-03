@@ -1,0 +1,19 @@
+map: Carla/Maps/Town05
+intersections: 15
+light_idx requested: 0
+
+t00  center=(33.6,-156.3)  light=0/2  yaw=-10.5°  file=intersection_00_l0.png
+t01  center=(30.1,90.1)  light=0/4  yaw=-140.8°  file=intersection_01_l0.png
+t02  center=(31.2,-89.3)  light=0/4  yaw=-132.5°  file=intersection_02_l0.png
+t03  center=(39.0,-197.0)  light=0/3  yaw=+48.1°  file=intersection_03_l0.png
+t04  center=(-50.6,-89.8)  light=0/4  yaw=-133.2°  file=intersection_04_l0.png
+t05  center=(-126.4,-89.8)  light=0/4  yaw=-140.7°  file=intersection_05_l0.png
+t06  center=(-126.7,1.0)  light=0/4  yaw=-142.0°  file=intersection_06_l0.png
+t07  center=(-49.4,1.2)  light=0/4  yaw=-136.2°  file=intersection_07_l0.png
+t08  center=(-49.7,89.0)  light=0/4  yaw=-134.9°  file=intersection_08_l0.png
+t09  center=(-126.1,89.2)  light=0/4  yaw=-139.3°  file=intersection_09_l0.png
+t10  center=(-190.4,1.2)  light=0/4  yaw=+46.3°  file=intersection_10_l0.png
+t11  center=(-122.9,-143.3)  light=0/3  yaw=+18.5°  file=intersection_11_l0.png
+t12  center=(-129.9,152.2)  light=0/3  yaw=-157.6°  file=intersection_12_l0.png
+t13  center=(24.6,197.2)  light=0/3  yaw=-130.4°  file=intersection_13_l0.png
+t14  center=(29.7,0.4)  light=0/4  yaw=-137.8°  file=intersection_14_l0.png

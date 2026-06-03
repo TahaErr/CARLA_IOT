@@ -1,0 +1,78 @@
+{
+  "config": {
+    "map": "Town10HD_Opt",
+    "intersections": [
+      0,
+      2,
+      4
+    ],
+    "penetration": 0.5,
+    "seed": 0,
+    "n_vehicles": 60,
+    "n_cavs": 30,
+    "n_walkers": 60,
+    "weather": "HardRainNoon",
+    "duration_s": 60.0,
+    "max_range_m": 300.0,
+    "local_sensor_enabled": true,
+    "local_sensor_range_m": 50.0,
+    "local_sensor_angle_deg": 90.0,
+    "v2v_enabled": true,
+    "v2v_range_m": 150.0,
+    "cpm_period_ms": 100.0,
+    "dt_s": 0.05,
+    "cav_attentive": false
+  },
+  "wall_seconds": 87.17880296707153,
+  "sim_seconds": 60.0,
+  "wall_to_sim_ratio": 1.4529800494511922,
+  "publishes_attempted": 1800,
+  "publishes_emitted": 1800,
+  "publishes_dropped": 0,
+  "cbr_mean": 0.208275,
+  "cbr_max": 0.238,
+  "collision_count": 13,
+  "primary_collision_count": 11,
+  "secondary_collision_count": 2,
+  "raw_collision_events": 73,
+  "cav_collision_count": 9,
+  "hdv_collision_count": 4,
+  "vru_collision_count": 3,
+  "cav_hit_pedestrian_count": 0,
+  "hdv_hit_pedestrian_count": 3,
+  "collisions_per_profile": {
+    "distracted": 5,
+    "ai_realistic": 7,
+    "attentive": 1
+  },
+  "actions_taken": {
+    "none": 13281,
+    "decelerate": 3704,
+    "soft_brake": 7868,
+    "hard_brake": 1832
+  },
+  "phantom_brakes_suppressed": 13,
+  "cooperative_brakes": 253,
+  "frozen_vehicle_count": 20,
+  "v2v_publishes_attempted": 13344,
+  "v2v_deliveries_emitted": 142151,
+  "v2v_received_total": 142120,
+  "dead_cav_count": 10,
+  "decode_errors": 0,
+  "hdv_profile_counts": {
+    "distracted": 9,
+    "attentive": 11,
+    "aggressive_hostile": 10
+  },
+  "cav_profile": "ai_realistic",
+  "profile_seconds": {
+    "1_world_tick": 15.766,
+    "2_snapshot": 0.056,
+    "3_rsu_yolo": 20.939,
+    "4_actors_build": 0.206,
+    "5_cav_decide": 48.944,
+    "6_v2v": 1.258,
+    "7_collision": 0.009
+  },
+  "status": "ok"
+}
