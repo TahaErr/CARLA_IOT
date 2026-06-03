@@ -52,6 +52,11 @@ def main() -> int:
     p.add_argument("--detector", required=True)
     p.add_argument("--out-dir", default="out/ablation")
     p.add_argument("--n-seeds", type=int, default=5)
+    p.add_argument("--seeds", default="",
+                   help="Explicit comma-separated seed list (e.g. '0,1' or '2,3'). "
+                        "Overrides --n-seeds. Used to split a shared ablation across "
+                        "machines: runner A does --seeds 0,1, runner B does --seeds 2,3. "
+                        "Cell filenames carry sNN so the two result sets merge cleanly.")
     p.add_argument("--duration", type=float, default=120.0)
     p.add_argument("--n-vehicles", type=int, default=60)
     p.add_argument("--walker-counts", default="0,60,120",
@@ -159,7 +164,15 @@ def main() -> int:
         return 1
     if not penetrations:
         penetrations = [0.0, 0.5, 1.0]
-    seeds = list(range(args.n_seeds))
+    if args.seeds.strip():
+        try:
+            seeds = [int(s.strip()) for s in args.seeds.split(",") if s.strip()]
+        except ValueError:
+            print(f"FAIL — --seeds must be comma-separated integers, got: {args.seeds}",
+                  file=sys.stderr)
+            return 1
+    else:
+        seeds = list(range(args.n_seeds))
     total = (len(maps) * len(penetrations) * len(seeds)
              * len(walker_counts) * len(weathers))
     done = 0
