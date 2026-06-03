@@ -678,6 +678,16 @@ def run_single(args, penetration: float, seed: int) -> dict:
                             cav_hard_brake_pending[cav.id] = True
                         ctrl = _control_for(decision.action)
                         if ctrl is not None:
+                            # Preserve the TM's current steering: a brake/decel
+                            # override must NOT zero the wheel mid-turn. The
+                            # default VehicleControl.steer=0.0 straightened CAVs
+                            # out of turns, running them wide into neighbours.
+                            # Keep the steer the TM just applied; override only
+                            # throttle/brake.
+                            try:
+                                ctrl.steer = cav.actor.get_control().steer
+                            except RuntimeError:
+                                pass
                             control_cmds.append(
                                 carla.command.ApplyVehicleControl(cav.actor.id, ctrl))
                     # Apply every CAV override in ONE batched RPC.
