@@ -156,6 +156,19 @@ table([
 ], [4.4 * cm, 12.4 * cm])
 gap(4)
 callout(
+    "Note on the p = 0.0 column",
+    "Penetration is the fraction of vehicles that are CAVs, so at p = 0.0 the fleet is 100% HDV. "
+    "HDVs neither carry nor act on cooperative messages, so <b>no V2X or V2V communication is used "
+    "or considered at p = 0.0</b> (coop-brakes / V2V-recv columns are exactly 0 there). Those "
+    "collisions are purely HDV-on-HDV / HDV-on-pedestrian and define the baseline the connected "
+    "conditions (p &ge; 0.5) are measured against. With zero CAVs the arm flags (--no-v2v / "
+    "--no-v2x) have nothing to act on, so the p = 0.0 cell is the same scenario in all three arms; "
+    "the small spread between the three entries is CARLA run-to-run nondeterminism, not a V2X "
+    "effect.",
+    bg=BOXBG, border=AMBER,
+)
+gap(4)
+callout(
     "Metric note: primary vs total collisions",
     "<b>coll</b> = total deduplicated incidents (one per vehicle pair). <b>primary</b> excludes "
     "<i>secondary</i> incidents - a new pair where one party was already immobilised by an earlier "

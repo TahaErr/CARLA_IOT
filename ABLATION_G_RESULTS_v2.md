@@ -40,6 +40,8 @@ Three-arm V2X / V2I / V2V penetration sweep, **2nd iteration (`G2`)** after the 
 
 At `p = 0.0` there are no CAVs, so that cell is the shared **no-V2X / no-V2V human baseline** in every arm.
 
+> **Note on the p = 0.0 column.** Penetration is the fraction of vehicles that are CAVs, so at `p = 0.0` the fleet is 100% HDV. HDVs neither carry nor act on any cooperative messages, so **no V2X (RSU->CAV CPM) or V2V (CAV<->CAV) communication is used or considered at p = 0.0** - the `coop brakes`, `v2v_recv` and `v2v_emit` columns are exactly 0 in every p = 0.0 row. The collisions there are purely HDV-on-HDV / HDV-on-pedestrian and define the baseline that the connected conditions (p >= 0.5) are measured against. Because the cooperative flags (`--no-v2v` / `--no-v2x`) have nothing to act on with zero CAVs, the p = 0.0 cell is the *same scenario* in all three arms; the small spread between the three p = 0.0 entries is CARLA's run-to-run nondeterminism at a fixed seed, **not** a V2X effect.
+
 **Metric note.** `coll` = total deduplicated collision incidents (one per unordered vehicle pair). `primary` excludes *secondary* incidents - a new pair where one party was already immobilised by an earlier crash (i.e. traffic piling into a stationary wreck rather than a fresh driving failure). **Primary is the cleaner safety signal** because the immobilise-in-place policy can otherwise let one wreck, bumped by several cars, count as several incidents.
 
 ---
