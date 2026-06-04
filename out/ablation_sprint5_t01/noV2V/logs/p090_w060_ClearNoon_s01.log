@@ -1,0 +1,5 @@
+FAIL — run crashed: rpc::timeout: Timeout of 2000ms while calling RPC function 'register_vehicle'
+=== Single run: penetration=0.9 seed=1
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town05.bin 
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town01.bin 
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town01.bin 

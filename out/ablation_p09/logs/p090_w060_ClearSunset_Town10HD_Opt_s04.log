@@ -1,0 +1,31 @@
+=== Single run: penetration=0.9 seed=4
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town10HD_Opt.bin 
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town10HD_Opt.bin 
+INFO:  Found the required file in cache!  Carla/Maps/TM/Town10HD_Opt.bin 
+ERROR: failed to destroy actor 8545 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 8550 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 8551 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 8552 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 8556 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 8571 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 8584 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 8586 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 8588 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 8589 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 8593 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 8600 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 8486 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 8492 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 8493 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 8497 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 8512 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 8525 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 8529 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 8530 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 8534 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 8541 : unable to destroy actor: not found 
+wrote out\ablation_p09\p090_w060_ClearSunset_Town10HD_Opt_s04.json
+  collisions:                1422 (cav=1268 hdv=154)
+  VRU collisions:            3 (cav-hit=2 hdv-hit=1)
+  phantom brakes suppressed: 191
+  actions taken:             {'none': 111818, 'decelerate': 6635, 'soft_brake': 5434, 'hard_brake': 5713}

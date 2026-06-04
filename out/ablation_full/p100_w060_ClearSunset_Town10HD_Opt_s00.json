@@ -1,0 +1,56 @@
+{
+  "config": {
+    "map": "Town10HD_Opt",
+    "intersections": [
+      0,
+      2,
+      4
+    ],
+    "penetration": 1.0,
+    "seed": 0,
+    "n_vehicles": 60,
+    "n_cavs": 60,
+    "n_walkers": 60,
+    "weather": "ClearSunset",
+    "duration_s": 120.0,
+    "max_range_m": 300.0,
+    "local_sensor_enabled": true,
+    "local_sensor_range_m": 50.0,
+    "local_sensor_angle_deg": 90.0
+  },
+  "wall_seconds": 182.10521411895752,
+  "sim_seconds": 120.0,
+  "wall_to_sim_ratio": 1.5175434509913126,
+  "publishes_attempted": 3600,
+  "publishes_emitted": 3600,
+  "publishes_dropped": 0,
+  "cbr_mean": 0.016375000000000008,
+  "cbr_max": 0.0165,
+  "collision_count": 1421,
+  "raw_collision_events": 25000,
+  "cav_collision_count": 1421,
+  "hdv_collision_count": 0,
+  "vru_collision_count": 4,
+  "cav_hit_pedestrian_count": 4,
+  "hdv_hit_pedestrian_count": 0,
+  "collisions_per_profile": {
+    "distracted": 426,
+    "attentive": 680,
+    "aggressive_hostile": 315
+  },
+  "actions_taken": {
+    "none": 122571,
+    "decelerate": 8742,
+    "soft_brake": 6975,
+    "hard_brake": 5712
+  },
+  "phantom_brakes_suppressed": 188,
+  "dead_cav_count": 0,
+  "decode_errors": 0,
+  "hdv_profile_counts": {
+    "distracted": 14,
+    "attentive": 28,
+    "aggressive_hostile": 18
+  },
+  "status": "ok"
+}

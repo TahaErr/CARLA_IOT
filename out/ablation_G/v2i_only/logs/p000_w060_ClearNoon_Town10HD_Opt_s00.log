@@ -1,0 +1,30 @@
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town05.bin 
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town10HD_Opt.bin 
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town10HD_Opt.bin 
+INFO:  Found the required file in cache!  Carla/Maps/TM/Town10HD_Opt.bin 
+ERROR: failed to destroy actor 30133 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 30136 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 30138 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 30142 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 30166 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 30170 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 30173 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 30179 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 30180 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 30182 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 30073 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 30076 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 30078 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 30082 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 30106 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 30110 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 30113 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 30119 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 30120 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 30122 : unable to destroy actor: not found 
+=== Single run: penetration=0.0 seed=0
+wrote out/ablation_G/v2i_only\p000_w060_ClearNoon_Town10HD_Opt_s00.json
+  collisions:                11 (cav=0 hdv=11)
+  VRU collisions:            3 (cav-hit=0 hdv-hit=3)
+  phantom brakes suppressed: 0
+  actions taken:             {'none': 0, 'decelerate': 0, 'soft_brake': 0, 'hard_brake': 0}

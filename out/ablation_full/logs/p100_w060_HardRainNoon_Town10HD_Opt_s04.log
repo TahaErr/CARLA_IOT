@@ -1,0 +1,26 @@
+=== Single run: penetration=1.0 seed=4
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town10HD_Opt.bin 
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town10HD_Opt.bin 
+INFO:  Found the required file in cache!  Carla/Maps/TM/Town10HD_Opt.bin 
+ERROR: failed to destroy actor 45900 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 45908 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 45910 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 45911 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 45913 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 45915 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 45916 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 45926 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 45943 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 45841 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 45849 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 45851 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 45852 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 45854 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 45857 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 45867 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 45884 : unable to destroy actor: not found 
+wrote out\ablation_full\p100_w060_HardRainNoon_Town10HD_Opt_s04.json
+  collisions:                1421 (cav=1421 hdv=0)
+  VRU collisions:            3 (cav-hit=3 hdv-hit=0)
+  phantom brakes suppressed: 180
+  actions taken:             {'none': 125038, 'decelerate': 7546, 'soft_brake': 6312, 'hard_brake': 5104}

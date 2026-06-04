@@ -98,6 +98,11 @@ class CAVDecision:
     track was close enough + confident enough to have triggered an
     action, but was held back by the hysteresis rule. This is the
     metric the proposal §4.1.1 contribution is measured against.
+
+    `cooperative_brake` is True iff the action was raised (in whole or in
+    part) by a V2V hard-brake warning from a leader ahead (Sprint 5
+    cooperative-awareness / DENM path), rather than purely by the
+    track-based TTC ladder.
     """
     action: Action
     triggering_track_id: Optional[int]
@@ -105,6 +110,7 @@ class CAVDecision:
     confirmed_tracks: tuple[Track, ...]
     unconfirmed_tracks: tuple[Track, ...]
     phantom_brake_suppressed: bool
+    cooperative_brake: bool = False
 
 
 # === Defaults from proposal §4.1.1 step 6 =================================
@@ -164,6 +170,11 @@ class CAVCore:
         ttc_ladder: tuple = DEFAULT_TTC_LADDER,
         safety_radius_m: float = 2.5,
         max_accel_ms2: Optional[dict] = None,
+        brake_warning_ttl_ms: float = 1000.0,
+        brake_warning_range_m: float = 40.0,
+        brake_warning_cone_deg: float = 90.0,
+        brake_warning_action: Action = Action.SOFT_BRAKE,
+        brake_warning_lateral_m: float = 2.0,
     ):
         """Args:
             cav_id: simulation identifier (used only in diagnostics).
@@ -179,6 +190,16 @@ class CAVCore:
                 this distance for TTC to be reported.
             max_accel_ms2: per-class acceleration caps. Reserved for
                 future propagation refinement.
+            brake_warning_ttl_ms: how long a received V2V hard-brake
+                warning stays actionable (Sprint 5 cooperative awareness).
+            brake_warning_range_m: only react to a warning whose sender is
+                within this distance ahead.
+            brake_warning_cone_deg: full forward aperture (±half) within
+                which a warning sender counts as "a leader ahead".
+            brake_warning_action: action floor a relevant warning imposes.
+                A trusted V2V intent bypasses the perception hysteresis —
+                the leader is *declaring* its own hard brake, not being
+                perceived — so it acts immediately.
         """
         self.cav_id = cav_id
         self.track_ttl_ms = track_ttl_ms
@@ -187,10 +208,17 @@ class CAVCore:
         self.ttc_ladder = tuple(ttc_ladder)
         self.safety_radius_m = safety_radius_m
         self.max_accel_ms2 = dict(max_accel_ms2 or _DEFAULT_MAX_ACCEL_MS2)
+        self.brake_warning_ttl_ms = brake_warning_ttl_ms
+        self.brake_warning_range_m = brake_warning_range_m
+        self.brake_warning_cone_deg = brake_warning_cone_deg
+        self.brake_warning_action = brake_warning_action
+        self.brake_warning_lateral_m = brake_warning_lateral_m
 
         self._tracks: dict[int, _MutableTrack] = {}
         self._next_track_id = 1
         self._rsu_positions: dict[str, tuple[float, float]] = {}
+        # Received V2V hard-brake warnings: (x, y, vx, vy, yaw_deg, sim_time_ms).
+        self._brake_warnings: list[tuple[float, float, float, float, float, float]] = []
 
     # --- setup ---------------------------------------------------------
 
@@ -202,6 +230,35 @@ class CAVCore:
         objects into the simulation world frame.
         """
         self._rsu_positions[rsu_id] = tuple(world_xy)  # type: ignore[arg-type]
+
+    def register_station(self, station_id: str, world_xy: tuple[float, float]) -> None:
+        """Alias of `register_rsu` for non-RSU senders (Sprint 5 V2V).
+
+        The position registry is station-agnostic — a fixed RSU registers
+        once at setup, while a mobile V2V (CAV) sender re-registers its
+        *current* pose on every message before `ingest_cpm` is called.
+        """
+        self.register_rsu(station_id, world_xy)
+
+    def ingest_brake_warning(
+        self,
+        sender_x_m: float,
+        sender_y_m: float,
+        sender_vx_ms: float,
+        sender_vy_ms: float,
+        sender_yaw_deg: float = 0.0,
+        sim_time_ms: float = 0.0,
+    ) -> None:
+        """Record a V2V hard-brake warning from another vehicle (Sprint 5).
+
+        Unlike a perceived object, this is the *sender's declaration of its
+        own emergency braking*. It is consumed in `update()`: if the sender
+        is a leader ahead within range, the ego pre-brakes without waiting
+        for the perception hysteresis to confirm a track.
+        """
+        self._brake_warnings.append(
+            (sender_x_m, sender_y_m, sender_vx_ms, sender_vy_ms, sender_yaw_deg, sim_time_ms)
+        )
 
     # --- ingest --------------------------------------------------------
 
@@ -309,6 +366,7 @@ class CAVCore:
         ego_vx_ms: float,
         ego_vy_ms: float,
         sim_time_ms: float,
+        ego_yaw_deg: Optional[float] = None,
     ) -> CAVDecision:
         """One decision cycle: prune, compute TTC, apply hysteresis,
         return the most aggressive surviving action.
@@ -323,7 +381,34 @@ class CAVCore:
         triggering_ttc: Optional[float] = None
         phantom_brake_suppressed = False
 
+        ego_speed = math.hypot(ego_vx_ms, ego_vy_ms)
+        if ego_yaw_deg is not None:
+            ego_yaw_rad = math.radians(ego_yaw_deg)
+            hx = math.cos(ego_yaw_rad)
+            hy = math.sin(ego_yaw_rad)
+        elif ego_speed >= 0.5:
+            hx = ego_vx_ms / ego_speed
+            hy = ego_vy_ms / ego_speed
+        else:
+            hx, hy = 1.0, 0.0
+
         for track in self._tracks.values():
+            # Ego self-exclusion: the RSU detects the CAV's own body and
+            # rebroadcasts it as a track sitting on top of the ego. A genuine
+            # *self-ghost* is co-located AND co-moving with the ego. A real
+            # hazard at close range (e.g. a stopped wreck the ego is rolling
+            # toward, or a car cutting in) has a large RELATIVE velocity, so a
+            # position-only gate would wrongly blind the CAV to exactly the
+            # threats that matter most. Require BOTH a tight position match and
+            # a velocity match before discarding the track as our own ghost.
+            dx_ego = track.x_m - ego_x_m
+            dy_ego = track.y_m - ego_y_m
+            if math.hypot(dx_ego, dy_ego) < 2.5:
+                dvx_ego = track.vx_ms - ego_vx_ms
+                dvy_ego = track.vy_ms - ego_vy_ms
+                if math.hypot(dvx_ego, dvy_ego) < 1.5:
+                    continue
+
             current_conf = self._current_confidence(track, sim_time_ms)
             confirmed = self._is_confirmed(track, sim_time_ms)
             snap = self._track_snapshot(track, sim_time_ms, current_conf, confirmed)
@@ -331,6 +416,49 @@ class CAVCore:
                 confirmed_snapshots.append(snap)
             else:
                 unconfirmed_snapshots.append(snap)
+
+            # Distance-based safety fallback for confirmed tracks in our lane
+            if confirmed:
+                dx = track.x_m - ego_x_m
+                dy = track.y_m - ego_y_m
+                d_long = dx * hx + dy * hy
+                d_lat = abs(-dx * hy + dy * hx)
+                # Longitudinal closing speed (>0 = the gap is shrinking). A
+                # co-moving leader we are safely following has closing ~0 and
+                # must NOT trip the emergency fallback — otherwise a CAV
+                # hard-brakes on the car ahead at its own 3 m following gap,
+                # which sits inside the 4 m hard-brake band (2.5 m self-ghost
+                # filter < 3 m gap < 4 m band). Only stationary wrecks and
+                # genuinely closing hazards (ego approaching) qualify.
+                rel_vx = track.vx_ms - ego_vx_ms
+                rel_vy = track.vy_ms - ego_vy_ms
+                closing_ms = -(rel_vx * hx + rel_vy * hy)
+                if (d_long > 0.0 and d_lat <= self.brake_warning_lateral_m
+                        and closing_ms >= 0.5):
+                    # Find confidence thresholds from the configured ttc_ladder
+                    conf_hard = 0.8
+                    conf_soft = 0.6
+                    conf_decel = 0.4
+                    for act, _, min_c in self.ttc_ladder:
+                        if act == Action.HARD_BRAKE:
+                            conf_hard = min_c
+                        elif act == Action.SOFT_BRAKE:
+                            conf_soft = min_c
+                        elif act == Action.DECELERATE:
+                            conf_decel = min_c
+
+                    dist_action = Action.NONE
+                    if d_long <= 4.0 and current_conf >= conf_hard:
+                        dist_action = Action.HARD_BRAKE
+                    elif d_long <= 6.5 and current_conf >= conf_soft:
+                        dist_action = Action.SOFT_BRAKE
+                    elif d_long <= 9.0 and current_conf >= conf_decel:
+                        dist_action = Action.DECELERATE
+
+                    if _ACTION_SEVERITY[dist_action] > _ACTION_SEVERITY[final_action]:
+                        final_action = dist_action
+                        triggering_track_id = track.track_id
+                        triggering_ttc = 0.0 if dist_action == Action.HARD_BRAKE else 1.5 if dist_action == Action.SOFT_BRAKE else 3.0
 
             ttc = _compute_ttc(
                 ego_x_m, ego_y_m, ego_vx_ms, ego_vy_ms,
@@ -354,6 +482,20 @@ class CAVCore:
                         triggering_ttc = ttc
                     break  # most aggressive tier wins per track
 
+        # --- Cooperative awareness: V2V hard-brake warnings ------------
+        # A leader ahead declaring its own hard brake (DENM-style intent)
+        # is trusted directly — it bypasses the perception hysteresis,
+        # which exists to filter *uncertain perceived* objects, not a
+        # peer's explicit announcement of its own state.
+        coop_action = self._cooperative_brake_action(
+            ego_x_m, ego_y_m, ego_vx_ms, ego_vy_ms, sim_time_ms, ego_yaw_deg=ego_yaw_deg
+        )
+        cooperative_brake = coop_action is not Action.NONE
+        if cooperative_brake and (
+            _ACTION_SEVERITY[coop_action] > _ACTION_SEVERITY[final_action]
+        ):
+            final_action = coop_action
+
         return CAVDecision(
             action=final_action,
             triggering_track_id=triggering_track_id,
@@ -361,6 +503,7 @@ class CAVCore:
             confirmed_tracks=tuple(confirmed_snapshots),
             unconfirmed_tracks=tuple(unconfirmed_snapshots),
             phantom_brake_suppressed=phantom_brake_suppressed,
+            cooperative_brake=cooperative_brake,
         )
 
     # --- diagnostics ---------------------------------------------------
@@ -433,6 +576,66 @@ class CAVCore:
         ]
         for tid in expired:
             del self._tracks[tid]
+
+    def _cooperative_brake_action(
+        self,
+        ego_x_m: float, ego_y_m: float,
+        ego_vx_ms: float, ego_vy_ms: float,
+        sim_time_ms: float,
+        ego_yaw_deg: Optional[float] = None,
+    ) -> Action:
+        """Return the action imposed by any actionable V2V brake warning.
+
+        A warning is actionable when its sender sits ahead of the ego
+        (within `brake_warning_cone_deg` of the ego's heading) and within
+        `brake_warning_range_m`. Stale warnings (older than the TTL) are
+        pruned here. Returns Action.NONE when nothing applies.
+        """
+        # Drop expired warnings first.
+        self._brake_warnings = [
+            w for w in self._brake_warnings
+            if sim_time_ms - w[5] <= self.brake_warning_ttl_ms
+        ]
+        if not self._brake_warnings:
+            return Action.NONE
+
+        ego_speed = math.hypot(ego_vx_ms, ego_vy_ms)
+        # A stopped ego has no rear-end risk to pre-empt; ignore warnings.
+        if ego_speed < 0.5:
+            return Action.NONE
+
+        if ego_yaw_deg is not None:
+            ego_yaw_rad = math.radians(ego_yaw_deg)
+            hx = math.cos(ego_yaw_rad)
+            hy = math.sin(ego_yaw_rad)
+        else:
+            hx = ego_vx_ms / ego_speed
+            hy = ego_vy_ms / ego_speed
+
+        cos_half = math.cos(math.radians(self.brake_warning_cone_deg / 2.0))
+
+        for sx, sy, svx, svy, syaw, _t in self._brake_warnings:
+            dx = sx - ego_x_m
+            dy = sy - ego_y_m
+            d = math.hypot(dx, dy)
+            if d < 1e-6 or d > self.brake_warning_range_m:
+                continue
+            if (dx * hx + dy * hy) / d >= cos_half:
+                # Same-direction check using sender yaw
+                syaw_rad = math.radians(syaw)
+                shx = math.cos(syaw_rad)
+                shy = math.sin(syaw_rad)
+                dot = hx * shx + hy * shy
+                if dot <= 0.0:
+                    continue
+
+                # Same-lane check using lateral offset
+                d_lat = abs(-dx * hy + dy * hx)
+                if d_lat > self.brake_warning_lateral_m:
+                    continue
+
+                return self.brake_warning_action
+        return Action.NONE
 
     def _current_confidence(self, track: _MutableTrack, sim_time_ms: float) -> float:
         dt_ms = sim_time_ms - track.last_seen_sim_time_ms

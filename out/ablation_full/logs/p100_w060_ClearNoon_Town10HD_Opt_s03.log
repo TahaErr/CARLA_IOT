@@ -1,0 +1,30 @@
+=== Single run: penetration=1.0 seed=3
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town10HD_Opt.bin 
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town10HD_Opt.bin 
+INFO:  Found the required file in cache!  Carla/Maps/TM/Town10HD_Opt.bin 
+ERROR: failed to destroy actor 35876 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 35879 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 35887 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 35888 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 35889 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 35892 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 35895 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 35910 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 35919 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 35920 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 35922 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 35924 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 35817 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 35829 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 35833 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 35836 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 35851 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 35860 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 35861 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 35863 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 35865 : unable to destroy actor: not found 
+wrote out\ablation_full\p100_w060_ClearNoon_Town10HD_Opt_s03.json
+  collisions:                1418 (cav=1418 hdv=0)
+  VRU collisions:            1 (cav-hit=1 hdv-hit=0)
+  phantom brakes suppressed: 187
+  actions taken:             {'none': 124147, 'decelerate': 7844, 'soft_brake': 6856, 'hard_brake': 5153}

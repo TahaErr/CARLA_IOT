@@ -1,0 +1,29 @@
+=== Single run: penetration=0.0 seed=4
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town01.bin 
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town01.bin 
+INFO:  Found the required file in cache!  Carla/Maps/TM/Town01.bin 
+ERROR: failed to destroy actor 60906 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 60911 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 60912 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 60920 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 60927 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 60928 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 60929 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 60935 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 60938 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 60944 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 60862 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 60867 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 60868 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 60876 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 60883 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 60884 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 60885 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 60891 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 60894 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 60900 : unable to destroy actor: not found 
+wrote out\ablation_full\p000_w060_HardRainNoon_Town01_s04.json
+  collisions:                1384 (cav=0 hdv=1384)
+  VRU collisions:            5 (cav-hit=0 hdv-hit=5)
+  phantom brakes suppressed: 0
+  actions taken:             {'none': 0, 'decelerate': 0, 'soft_brake': 0, 'hard_brake': 0}

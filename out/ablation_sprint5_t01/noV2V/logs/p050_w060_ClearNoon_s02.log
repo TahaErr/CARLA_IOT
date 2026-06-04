@@ -1,0 +1,2 @@
+FAIL — run crashed: time-out of 20000ms while waiting for the simulator, make sure the simulator is ready and connected to 127.0.0.1:2000
+=== Single run: penetration=0.5 seed=2

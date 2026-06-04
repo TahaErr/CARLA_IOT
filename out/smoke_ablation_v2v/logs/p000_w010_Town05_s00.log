@@ -1,0 +1,4 @@
+FAIL — run crashed: time-out of 120000ms while waiting for the simulator, make sure the simulator is ready and connected to 127.0.0.1:2000
+=== Single run: penetration=0.0 seed=0
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town05.bin 
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town05.bin 

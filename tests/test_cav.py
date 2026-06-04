@@ -350,3 +350,148 @@ def test_get_tracks_returns_sorted_immutable_snapshot():
     # Frozen dataclass — can't mutate.
     with pytest.raises(Exception):  # FrozenInstanceError
         tracks[0].x_m = 999.0
+
+
+# === I. Cooperative brake warning (Sprint 5 V2V / DENM) ===================
+
+def test_brake_warning_from_leader_ahead_triggers_cooperative_brake():
+    """A V2V hard-brake warning from a leader ahead, ego approaching it,
+    triggers a cooperative brake even with no perceived track at all."""
+    c = _core()
+    c.ingest_brake_warning(20.0, 0.0, 0.0, 0.0, sim_time_ms=0.0)
+    d = c.update(ego_x_m=0, ego_y_m=0, ego_vx_ms=10.0, ego_vy_ms=0.0,
+                 sim_time_ms=0.0)
+    assert d.cooperative_brake is True
+    assert d.action == Action.SOFT_BRAKE          # default brake_warning_action
+    # No perception involved — hysteresis suppression must not be implicated.
+    assert d.phantom_brake_suppressed is False
+
+
+def test_brake_warning_from_vehicle_behind_is_ignored():
+    """A warning from behind the ego is not a rear-end risk — ignore it."""
+    c = _core()
+    c.ingest_brake_warning(-20.0, 0.0, 0.0, 0.0, sim_time_ms=0.0)
+    d = c.update(0, 0, 10.0, 0.0, sim_time_ms=0.0)
+    assert d.cooperative_brake is False
+    assert d.action == Action.NONE
+
+
+def test_brake_warning_out_of_range_is_ignored():
+    c = _core(brake_warning_range_m=40.0)
+    c.ingest_brake_warning(60.0, 0.0, 0.0, 0.0, sim_time_ms=0.0)
+    d = c.update(0, 0, 10.0, 0.0, sim_time_ms=0.0)
+    assert d.cooperative_brake is False
+
+
+def test_brake_warning_ignored_when_ego_stopped():
+    """A stopped ego has no rear-end risk; the warning is moot."""
+    c = _core()
+    c.ingest_brake_warning(20.0, 0.0, 0.0, 0.0, sim_time_ms=0.0)
+    d = c.update(0, 0, 0.0, 0.0, sim_time_ms=0.0)
+    assert d.cooperative_brake is False
+
+
+def test_brake_warning_expires_after_ttl():
+    c = _core(brake_warning_ttl_ms=1000.0)
+    c.ingest_brake_warning(20.0, 0.0, 0.0, 0.0, sim_time_ms=0.0)
+    d = c.update(0, 0, 10.0, 0.0, sim_time_ms=1500.0)
+    assert d.cooperative_brake is False
+
+
+def test_track_hard_brake_dominates_cooperative_soft_brake():
+    """When a confirmed track already commands HARD_BRAKE, the cooperative
+    SOFT_BRAKE floor must not downgrade it — but the flag still reports the
+    warning was active."""
+    c = _core()
+    c.ingest_cpm(_cpm([_obj(x=5.0, y=0.0, conf=0.9)]), "A", 0.0, 0.0)
+    c.ingest_cpm(_cpm([_obj(x=5.0, y=0.0, conf=0.9)]), "A", 50.0, 50.0)
+    c.ingest_brake_warning(8.0, 0.0, 0.0, 0.0, sim_time_ms=50.0)
+    d = c.update(0, 0, 10.0, 0.0, sim_time_ms=50.0)
+    assert d.action == Action.HARD_BRAKE
+    assert d.cooperative_brake is True
+
+
+def test_register_station_alias_feeds_ingest_cpm():
+    """register_station is a drop-in for register_rsu (mobile V2V sender)."""
+    c = CAVCore(cav_id="cav_test")
+    c.register_station("cav_99", (0.0, 0.0))
+    c.ingest_cpm(_cpm([_obj(x=10.0, y=0.0)], station_id=99), "cav_99", 0.0, 0.0)
+    assert len(c.get_tracks()) == 1
+
+
+def test_brake_warning_same_direction_and_lateral_offset():
+    """Verify that V2V brake warnings are filtered by heading direction and lateral offset."""
+    # Setup ego at (0, 0) moving +x (ego_vx=10, ego_vy=0)
+    # 1. Opposite direction (yaw = 180): ignored
+    c = _core()
+    c.ingest_brake_warning(20.0, 0.0, -10.0, 0.0, sender_yaw_deg=180.0, sim_time_ms=0.0)
+    d = c.update(0, 0, 10.0, 0.0, sim_time_ms=0.0)
+    assert d.action == Action.NONE
+
+    # 2. Large lateral offset (y = 5.0): ignored
+    c = _core()
+    c.ingest_brake_warning(20.0, 5.0, 10.0, 0.0, sender_yaw_deg=0.0, sim_time_ms=0.0)
+    d = c.update(0, 0, 10.0, 0.0, sim_time_ms=0.0)
+    assert d.action == Action.NONE
+
+    # 3. Same direction, same lane (y = 0.5): accepted
+    c = _core()
+    c.ingest_brake_warning(20.0, 0.5, 10.0, 0.0, sender_yaw_deg=0.0, sim_time_ms=0.0)
+    d = c.update(0, 0, 10.0, 0.0, sim_time_ms=0.0)
+    assert d.action == Action.SOFT_BRAKE
+
+
+def test_distance_based_safety_fallback():
+    """Verify that confirmed tracks close in front of us trigger distance fallback actions."""
+    # Setup ego at (0, 0) moving +x (ego_vx=1.0, ego_vy=0)
+    # A confirmed track at x = 3.0 m (<= 4.0 m) should trigger HARD_BRAKE, even if TTC calculation
+    # is large/non-actionable because speed is low.
+    c = _core()
+    # Confirm track first
+    c.ingest_cpm(_cpm([_obj(x=3.0, y=0.0, conf=0.9)]), "A", 0.0, 0.0)
+    c.ingest_cpm(_cpm([_obj(x=3.0, y=0.0, conf=0.9)]), "A", 50.0, 50.0)
+    
+    # Ego speed = 1.0 m/s. TTC = 3.0 / 1.0 = 3.0 s (TTC ladder would only trigger DECELERATE).
+    # Distance-based fallback triggers HARD_BRAKE because distance is 3.0 m <= 4.0 m.
+    d = c.update(0, 0, 1.0, 0.0, sim_time_ms=50.0)
+    assert d.action == Action.HARD_BRAKE
+
+    # Confirmed track at x = 5.0 m (<= 6.5 m) triggers SOFT_BRAKE
+    c = _core()
+    c.ingest_cpm(_cpm([_obj(x=5.0, y=0.0, conf=0.9)]), "A", 0.0, 0.0)
+    c.ingest_cpm(_cpm([_obj(x=5.0, y=0.0, conf=0.9)]), "A", 50.0, 50.0)
+    d = c.update(0, 0, 1.0, 0.0, sim_time_ms=50.0)
+    assert d.action == Action.SOFT_BRAKE
+
+    # Confirmed track at x = 8.0 m (<= 9.0 m) triggers DECELERATE
+    c = _core()
+    c.ingest_cpm(_cpm([_obj(x=8.0, y=0.0, conf=0.9)]), "A", 0.0, 0.0)
+    c.ingest_cpm(_cpm([_obj(x=8.0, y=0.0, conf=0.9)]), "A", 50.0, 50.0)
+    d = c.update(0, 0, 1.0, 0.0, sim_time_ms=50.0)
+    assert d.action == Action.DECELERATE
+
+
+def test_ego_self_exclusion():
+    """A co-located AND co-moving track is the ego's own RSU ghost reflection
+    and must be ignored. The ego moves +x at 5 m/s; the ghost sits 1 m ahead
+    moving at the same 5 m/s (zero relative velocity)."""
+    c = _core()
+    c.ingest_cpm(_cpm([_obj(x=1.0, y=0.0, vx=5.0, conf=0.9)]), "A", 0.0, 0.0)
+    c.ingest_cpm(_cpm([_obj(x=1.0, y=0.0, vx=5.0, conf=0.9)]), "A", 50.0, 50.0)
+    d = c.update(0, 0, 5.0, 0.0, sim_time_ms=50.0)
+    assert d.action == Action.NONE
+
+
+def test_self_exclusion_does_not_blind_close_wreck():
+    """Regression for the Config-G inversion: a STATIONARY wreck 2 m ahead of a
+    moving ego is NOT a self-ghost (large relative velocity) and must still
+    trigger emergency braking. The old position-only 3 m gate wrongly blanked
+    this out, so CAVs rolled into frozen wrecks."""
+    c = _core()
+    # Stationary track (vx=0) at x = 2.0 m, ego approaching at 8 m/s.
+    c.ingest_cpm(_cpm([_obj(x=2.0, y=0.0, vx=0.0, conf=0.9)]), "A", 0.0, 0.0)
+    c.ingest_cpm(_cpm([_obj(x=2.0, y=0.0, vx=0.0, conf=0.9)]), "A", 50.0, 50.0)
+    d = c.update(0, 0, 8.0, 0.0, sim_time_ms=50.0)
+    assert d.action == Action.HARD_BRAKE
+
+

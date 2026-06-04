@@ -1,0 +1,31 @@
+=== Single run: penetration=0.0 seed=0
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town05.bin 
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town05.bin 
+INFO:  Found the required file in cache!  Carla/Maps/TM/Town05.bin 
+Traceback (most recent call last):
+  File "C:\Users\TAHA\Desktop\CARLA_0.9.16\PythonAPI\CARLA_IOT\v2x-sim-sprint1\v2x-sim\scripts\40_ablation_run.py", line 383, in run_single
+    if rsu.tick(sim_time_ms, receivers):
+  File "C:\Users\TAHA\Desktop\CARLA_0.9.16\PythonAPI\CARLA_IOT\v2x-sim-sprint1\v2x-sim\v2xsim\carla_rsu.py", line 256, in tick
+    detections = yolo_result_to_detections(
+  File "C:\Users\TAHA\Desktop\CARLA_0.9.16\PythonAPI\CARLA_IOT\v2x-sim-sprint1\v2x-sim\v2xsim\carla_rsu.py", line 79, in yolo_result_to_detections
+    world_pt = bbox_bottom_center_to_world(K, world_to_cam, xyxy)
+  File "C:\Users\TAHA\Desktop\CARLA_0.9.16\PythonAPI\CARLA_IOT\v2x-sim-sprint1\v2x-sim\v2xsim\projection.py", line 157, in bbox_bottom_center_to_world
+    return image_to_ground_world(K, world_to_cam, u, v, ground_z)
+  File "C:\Users\TAHA\Desktop\CARLA_0.9.16\PythonAPI\CARLA_IOT\v2x-sim-sprint1\v2x-sim\v2xsim\projection.py", line 112, in image_to_ground_world
+    K_inv = np.linalg.inv(K)
+  File "C:\Users\TAHA\anaconda3\envs\v2xsim\lib\site-packages\numpy\linalg\_linalg.py", line 601, in inv
+    a, wrap = _makearray(a)
+  File "C:\Users\TAHA\anaconda3\envs\v2xsim\lib\site-packages\numpy\linalg\_linalg.py", line 125, in _makearray
+    wrap = getattr(a, "__array_wrap__", new.__array_wrap__)
+KeyboardInterrupt
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\TAHA\Desktop\CARLA_0.9.16\PythonAPI\CARLA_IOT\v2x-sim-sprint1\v2x-sim\scripts\40_ablation_run.py", line 719, in <module>
+    sys.exit(main())
+  File "C:\Users\TAHA\Desktop\CARLA_0.9.16\PythonAPI\CARLA_IOT\v2x-sim-sprint1\v2x-sim\scripts\40_ablation_run.py", line 697, in main
+    metrics = run_single(args, penetration=args.penetration, seed=args.seed)
+  File "C:\Users\TAHA\Desktop\CARLA_0.9.16\PythonAPI\CARLA_IOT\v2x-sim-sprint1\v2x-sim\scripts\40_ablation_run.py", line 577, in run_single
+    try: c.destroy()
+KeyboardInterrupt

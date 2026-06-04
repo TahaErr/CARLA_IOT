@@ -1,0 +1,3 @@
+INFO:  Found the required file in cache!  Carla/Maps/TM/Town05.bin 
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town05.bin 
+WARNING: World::ApplySettings: After 30  attemps, the settings were not correctly set. Please check that everything is consistent. 

@@ -1,0 +1,8 @@
+=== Single run: penetration=1.0 seed=1
+wrote out/ablation_sprint5_t10p100_fast/v2v\p100_w060_ClearNoon_s01.json
+  collisions:                2 (cav=2 hdv=0)
+  VRU collisions:            0 (cav-hit=0 hdv-hit=0)
+  phantom brakes suppressed: 39
+  actions taken:             {'none': 30516, 'decelerate': 926, 'soft_brake': 9920, 'hard_brake': 29113}
+INFO:  Found the required file in cache!  Carla/Maps/TM/Town10HD_Opt.bin 
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town10HD_Opt.bin 

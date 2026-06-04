@@ -31,7 +31,8 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from .broker import Broker
 from .cav import CAVCore, CAVDecision, LocalDetection
-from .cpm import decode_cpm
+from .cpm import CPM, CPMObject, decode_cpm
+from .v2v import V2VMessage, decode_v2v, encode_v2v, is_v2v
 
 if TYPE_CHECKING:
     import carla
@@ -131,6 +132,35 @@ def actors_in_cone(
     return result
 
 
+# === V2V outgoing-object builder (pure-Python, unit-testable) ===========
+
+def local_dets_to_cpm_objects(
+    local_dets: list[LocalDetection],
+    sender_x_m: float,
+    sender_y_m: float,
+) -> list[CPMObject]:
+    """Convert a CAV's own (world-frame) local detections into CPMObjects
+    encoded **relative to the sender's pose**, for a V2V broadcast.
+
+    Mirrors how `rsu.RSU.build_cpm` encodes objects relative to the RSU's
+    fixed reference. The receiver reconstructs world coordinates by adding
+    the sender pose carried in the same V2V message — so the sender's
+    current position is the local cartesian origin here.
+    """
+    objects: list[CPMObject] = []
+    for i, det in enumerate(local_dets):
+        objects.append(CPMObject(
+            object_id=i + 1,
+            object_class=det.object_class,
+            x_m=det.x_m - sender_x_m,
+            y_m=det.y_m - sender_y_m,
+            vx_ms=det.vx_ms,
+            vy_ms=det.vy_ms,
+            confidence=det.confidence,
+        ))
+    return objects
+
+
 # === CarlaCAV ===========================================================
 
 class CarlaCAV:
@@ -156,6 +186,7 @@ class CarlaCAV:
         local_sensor_range_m: float = 50.0,
         local_sensor_angle_deg: float = 90.0,
         local_sensor_class_filter: tuple[str, ...] = ("passengerCar", "pedestrian"),
+        enable_v2v: bool = False,
     ) -> None:
         """Args:
             vehicle: CARLA Vehicle actor.
@@ -175,11 +206,21 @@ class CarlaCAV:
         self.local_sensor_range_m = local_sensor_range_m
         self.local_sensor_angle_deg = local_sensor_angle_deg
         self.local_sensor_class_filter = tuple(local_sensor_class_filter)
+        self.enable_v2v = enable_v2v
 
         self.id = f"cav_{vehicle.id}"
         self._core = cav_core if cav_core is not None else CAVCore(cav_id=self.id)
         self.decode_errors = 0
+        self.v2v_received = 0
         self._alive = True
+
+        # Cache of the most recent tick's ego pose / velocity / local
+        # detections, so build_v2v_message() can assemble a broadcast on the
+        # CPM period without re-polling the (possibly dead) CARLA actor.
+        self._last_ego_xy: Optional[tuple[float, float]] = None
+        self._last_ego_vel: tuple[float, float] = (0.0, 0.0)
+        self._last_ego_yaw: float = 0.0
+        self._last_local_dets: list[LocalDetection] = []
 
     # --- lifecycle / liveness -----------------------------------------
 
@@ -214,6 +255,7 @@ class CarlaCAV:
         self,
         sim_time_ms: float,
         other_actors: Optional[list] = None,
+        ego_state: Optional[tuple] = None,
     ) -> Optional[CAVDecision]:
         """One decision cycle. Returns None if the underlying actor is dead.
 
@@ -238,51 +280,134 @@ class CarlaCAV:
         if not self.is_alive():
             return None
         try:
-            # === 1. Local sensor (optional) ========================
-            if self.local_sensor_enabled and other_actors:
+            # === 1. Ego state ======================================
+            # Prefer a caller-supplied (x, y, yaw_deg, vx, vy) read from a
+            # shared per-tick world snapshot — this avoids 2 CARLA RPCs per
+            # CAV per tick (the runner is RPC-latency-bound, not compute-
+            # bound). Falls back to polling the actor directly otherwise.
+            if ego_state is not None:
+                ego_x, ego_y, ego_yaw, ego_vx, ego_vy = ego_state
+            else:
                 ego_t = self.actor.get_transform()
+                ego_v = self.actor.get_velocity()
+                ego_x, ego_y = ego_t.location.x, ego_t.location.y
+                ego_yaw, ego_vx, ego_vy = ego_t.rotation.yaw, ego_v.x, ego_v.y
+            self._last_ego_xy = (ego_x, ego_y)
+            self._last_ego_vel = (ego_vx, ego_vy)
+            self._last_ego_yaw = ego_yaw
+
+            # === 2. Local sensor (optional) ========================
+            if self.local_sensor_enabled and other_actors:
                 local_dets = actors_in_cone(
-                    ego_x=ego_t.location.x,
-                    ego_y=ego_t.location.y,
-                    ego_yaw_deg=ego_t.rotation.yaw,
+                    ego_x=ego_x,
+                    ego_y=ego_y,
+                    ego_yaw_deg=ego_yaw,
                     actors=other_actors,
                     cone_range_m=self.local_sensor_range_m,
                     cone_angle_deg=self.local_sensor_angle_deg,
                     class_filter=self.local_sensor_class_filter,
                     ego_actor_id=self.actor.id,
                 )
+                self._last_local_dets = local_dets
                 self._core.ingest_local_detections(local_dets, sim_time_ms)
+            else:
+                self._last_local_dets = []
 
-            # === 2. Pull + ingest CPMs =============================
+            # === 3. Pull + ingest deliveries (RSU CPM or V2V) ======
             for tx in self.broker.deliveries_due(sim_time_ms, receiver_id=self.id):
                 try:
-                    cpm = decode_cpm(tx.payload_bytes)
-                    self._core.ingest_cpm(
-                        cpm,
-                        rsu_id=tx.sender_id,
-                        cpm_send_sim_time_ms=tx.sim_time_sent_ms,
-                        sim_time_ms=sim_time_ms,
-                    )
+                    if is_v2v(tx.payload_bytes):
+                        self._ingest_v2v(tx, sim_time_ms)
+                    else:
+                        cpm = decode_cpm(tx.payload_bytes)
+                        self._core.ingest_cpm(
+                            cpm,
+                            rsu_id=tx.sender_id,
+                            cpm_send_sim_time_ms=tx.sim_time_sent_ms,
+                            sim_time_ms=sim_time_ms,
+                        )
                 except Exception:
                     self.decode_errors += 1
 
-            # === 3. Ego state ======================================
-            ego_t = self.actor.get_transform()
-            ego_v = self.actor.get_velocity()
-
             # === 4. Decision =======================================
             return self._core.update(
-                ego_x_m=ego_t.location.x,
-                ego_y_m=ego_t.location.y,
-                ego_vx_ms=ego_v.x,
-                ego_vy_ms=ego_v.y,
+                ego_x_m=ego_x,
+                ego_y_m=ego_y,
+                ego_vx_ms=ego_vx,
+                ego_vy_ms=ego_vy,
                 sim_time_ms=sim_time_ms,
+                ego_yaw_deg=ego_yaw,
             )
         except RuntimeError as e:
             if "destroyed actor" in str(e):
                 self._alive = False
                 return None
             raise
+
+    # --- V2V (Sprint 5) -----------------------------------------------
+
+    def _ingest_v2v(self, tx, sim_time_ms: float) -> None:
+        """Decode a received V2V message and feed both of its halves into
+        the CAVCore: shared perceived objects (CPM path) and an optional
+        hard-brake warning (cooperative-awareness path)."""
+        msg = decode_v2v(tx.payload_bytes)
+        self.v2v_received += 1
+        # Register the mobile sender's CURRENT pose so its relative objects
+        # translate back to world frame correctly.
+        self._core.register_station(tx.sender_id, (msg.x_m, msg.y_m))
+        if msg.objects:
+            cpm = CPM(
+                station_id=0,
+                generation_delta_time_ms=int(msg.gen_time_ms) % 65536,
+                objects=list(msg.objects),
+            )
+            self._core.ingest_cpm(
+                cpm,
+                rsu_id=tx.sender_id,
+                cpm_send_sim_time_ms=tx.sim_time_sent_ms,
+                sim_time_ms=sim_time_ms,
+            )
+        if msg.hard_brake:
+            self._core.ingest_brake_warning(
+                msg.x_m, msg.y_m, msg.vx_ms, msg.vy_ms, msg.yaw_deg, sim_time_ms,
+            )
+
+    def build_v2v_message(
+        self,
+        sim_time_ms: float,
+        hard_brake: bool = False,
+    ) -> Optional[V2VMessage]:
+        """Assemble this CAV's outgoing V2V broadcast from the most recent
+        tick's cached ego pose + local detections.
+
+        Returns None if the CAV has no cached pose yet (no tick has run) or
+        is dead. The runner encodes the result with `encode_v2v` and hands
+        it to the broker with the in-range CAV receivers.
+        """
+        if not self._alive or self._last_ego_xy is None:
+            return None
+        ego_x, ego_y = self._last_ego_xy
+        vx, vy = self._last_ego_vel
+        objects = local_dets_to_cpm_objects(self._last_local_dets, ego_x, ego_y)
+        return V2VMessage(
+            sender_id=self.id,
+            x_m=ego_x, y_m=ego_y,
+            vx_ms=vx, vy_ms=vy,
+            yaw_deg=self._last_ego_yaw,
+            gen_time_ms=int(sim_time_ms),
+            hard_brake=hard_brake,
+            objects=tuple(objects),
+        )
+
+    def encode_v2v_message(
+        self,
+        sim_time_ms: float,
+        hard_brake: bool = False,
+    ) -> Optional[bytes]:
+        """Convenience: build + encode the outgoing V2V broadcast. Returns
+        None if there is nothing to send."""
+        msg = self.build_v2v_message(sim_time_ms, hard_brake=hard_brake)
+        return encode_v2v(msg) if msg is not None else None
 
     # --- diagnostics --------------------------------------------------
 

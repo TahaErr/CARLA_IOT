@@ -1,0 +1,37 @@
+=== Single run: penetration=1.0 seed=0
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town10HD_Opt.bin 
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town10HD_Opt.bin 
+INFO:  Found the required file in cache!  Carla/Maps/TM/Town10HD_Opt.bin 
+ERROR: failed to destroy actor 44607 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44614 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44617 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44622 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44624 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44626 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44628 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44633 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44638 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44641 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44649 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44656 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44657 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44663 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44547 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44554 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44557 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44562 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44564 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44566 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44568 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44573 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44578 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44581 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44589 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44596 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44597 : unable to destroy actor: not found 
+ERROR: failed to destroy actor 44603 : unable to destroy actor: not found 
+wrote out\ablation_full\p100_w060_HardRainNoon_Town10HD_Opt_s00.json
+  collisions:                1358 (cav=1358 hdv=0)
+  VRU collisions:            2 (cav-hit=2 hdv-hit=0)
+  phantom brakes suppressed: 155
+  actions taken:             {'none': 125809, 'decelerate': 7526, 'soft_brake': 6398, 'hard_brake': 4267}

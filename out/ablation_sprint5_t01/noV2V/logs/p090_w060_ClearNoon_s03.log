@@ -1,0 +1,4 @@
+FAIL — run crashed: Map 'Town01' has only 0 signalised intersection(s); the V2X ablation requires at least 3.
+=== Single run: penetration=0.9 seed=3
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town01.bin 
+INFO:  Found the required file in cache!  Carla/Maps/Nav/Town10HD_Opt.bin 
